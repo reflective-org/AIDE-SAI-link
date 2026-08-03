@@ -1,0 +1,21 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+cff-version: 1.2.0
+title: YOUR PROJECT NAME
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - name: Reflective
+    address: 26 Pier Annex
+    city: San Francisco
+    country: US
+    post-code: '94105'
+    website: 'https://www.reflective.org'
+    email: media@reflective.org
+repository-code: 'https://github.com/reflective-org/YOUR_REPO'
+keywords:
+  - YOUR KEYWORDS HERE
+license: Apache-2.0
+date-released: '' # Add date of release here
