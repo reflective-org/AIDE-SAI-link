@@ -216,3 +216,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# Internal notes -- this repo is public
+# ---------------------------------------------------------------------------
+# NOTES.md holds the operational history that does not belong in a world-readable
+# repo: GPU allocations on the shared box, incident forensics, and the older
+# private tree this one was split out of. The physics rationale and every measured
+# number live in MANIFEST.md instead -- none of that was removed.
+NOTES.md
+
+# ---------------------------------------------------------------------------
+# Model run outputs (this project)
+# ---------------------------------------------------------------------------
+# A single 90-day run writes ~5 GB of .npz per checkpoint cycle; the tree this
+# repo replaced accumulated 30 GB of them and became unusable. The patterns are
+# broad ON PURPOSE -- outputs land in whatever directory you launch from, under
+# names keyed by OUT_TAG, so a prefix-only rule (coupled_*) misses them.
+*.npz
+*.png
+*.gif
+*.pid

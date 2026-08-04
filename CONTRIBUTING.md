@@ -1,4 +1,4 @@
-# Contributing to {REPO}
+# Contributing to aide_sai_core
 
 Thank you for your interest in contributing! This document provides guidelines for contributing to the project.
 All contributors are expected to follow our [Code of Conduct](./CODE_OF_CONDUCT.md).
@@ -8,8 +8,8 @@ All contributors are expected to follow our [Code of Conduct](./CODE_OF_CONDUCT.
 1. Fork and clone the repository:
 
 ```bash
-git clone https://github.com/reflective-org/{REPO}.git
-cd {REPO}
+git clone https://github.com/reflective-org/aide_sai_core.git
+cd aide_sai_core
 ```
 
 2. Install

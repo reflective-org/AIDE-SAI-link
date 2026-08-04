@@ -1,7 +1,14 @@
 # This CITATION.cff file was generated with cffinit.
 # Visit https://bit.ly/cffinit to generate yours today!
 cff-version: 1.2.0
-title: YOUR PROJECT NAME
+title: 'aide_sai_core: a one-way coupled CESM to TOMAS-JAX sectional aerosol model for stratospheric aerosol injection'
+abstract: >-
+  A GPU (JAX) sectional stratospheric aerosol model driven one way by CESM
+  meteorology. Carries 40 TOMAS size bins in two moments plus SO2 and H2SO4,
+  with continuous SO2 injection, SO2-OH chemistry, nucleation, condensation,
+  Brownian coagulation, gravitational settling through an open band bottom,
+  Lin-Rood flux-form transport, and RRTMGP radiative transfer with Mie optics
+  on the wet H2SO4/H2O droplet.
 message: >-
   If you use this software, please cite it using the
   metadata from this file.
@@ -14,8 +21,15 @@ authors:
     post-code: '94105'
     website: 'https://www.reflective.org'
     email: media@reflective.org
-repository-code: 'https://github.com/reflective-org/YOUR_REPO'
+repository-code: 'https://github.com/reflective-org/aide_sai_core'
 keywords:
-  - YOUR KEYWORDS HERE
+  - stratospheric aerosol injection
+  - solar radiation modification
+  - sectional aerosol microphysics
+  - TOMAS
+  - CESM
+  - JAX
+  - radiative transfer
+  - RRTMGP
 license: Apache-2.0
 date-released: '' # Add date of release here

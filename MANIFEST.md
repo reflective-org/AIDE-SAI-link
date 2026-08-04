@@ -1,0 +1,189 @@
+# MANIFEST — CESM → TOMAS-JAX SAI model
+
+The canonical reference for this tree: what each file is, every knob, and **why
+each default is what it is**. `README.md` is the orientation; where `docs/`
+disagrees with this file, this file is current.
+
+## Layout
+
+Core modules are **flat on purpose** — `coupling.py` does bare
+`import settling` / `radiation`, and both `coupling.py` and `driver_fast.py` insert
+`fast_advection/` on `sys.path` themselves. Moving them into subdirectories breaks
+those imports.
+
+```
+coupling.py                 the model: grid, IC/BC, budget, diagnostics, main loop
+driver_fast.py              THE production entry point. Imports coupling.py and swaps in
+                            two pieces before running it: the tomas_jax.fast batched
+                            microphysics engine (replacing coupling's per-cell chain) and
+                            fct_lr advection. Separate file, not a flag, because the fast
+                            engine has its own API and is hard-fixed at 40 bins.
+fct_core.py                 legacy sealed-face advection. NOT on the run path --
+                            coupling.py imports fct_lr directly, so standalone and
+                            production use the same transport. Kept solely for the
+                            bit-identical legacy check in validation/test_conservation.py.
+settling.py                 gravitational settling; also the canonical wet-droplet
+                            sizing (tang_density/wet_size), which radiation.py imports
+radiation.py                RRTMGP + Mie optics
+fast_advection/fct_lr.py    Lin-Rood flux-form advection (the production scheme)
+fast_advection/fct_fast.py  PPM/Zalesak primitives that fct_lr imports
+rad_data/                   palmer_williams_h2so4.dat (HITRAN Aerosols-2016)
+run_prod.sh                 the production launcher (self-documenting header)
+plot_run.py                 the three post-run figures (dashboard, filmstrip, size dist)
+gif_run.py                  animated versions of the filmstrip panels
+docs/                       PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
+validation/                 harnesses -- see below
+```
+
+**Analysis scripts are flat and read `coupled_*_<TAG>.npz` from the current working
+directory**, so run them from wherever the outputs are. Outputs land in whatever
+directory you launch from, and `.gitignore` excludes `*.npz/*.png/*.gif/*.log`.
+
+## Setup from a fresh clone
+
+```bash
+git clone https://github.com/reflective-org/aide_sai_core.git
+git clone https://github.com/reflective-org/tomas-jax                 # beside it -- found automatically
+git clone https://github.com/climate-analytics-lab/jax-rrtmgp         # ditto
+pip install -r aide_sai_core/requirements.txt
+pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusable for production
+cd aide_sai_core && N_HOURS=6 OUT_TAG=smoke ./run_prod.sh    # smoke test first
+```
+
+| dependency | not shipped because | how it is found |
+|---|---|---|
+| `tomas-jax` | separate repo (microphysics) | `$TOMAS_JAX_PATH`, else `../tomas-jax`, else the normal import path |
+| `jax-rrtmgp` | separate repo (radiation) | `$RRTMGP_PATH`, same order. `RAD=0` skips radiation and this dependency |
+| CESM `h1` hourly meteorology + MAM4 | ~23 TB as archived | `$CESM_DIR` (+ `CESM_PREFIX`, `CESM_SUF`). Layout: `$CESM_DIR/hour_1/$CESM_PREFIX.h1.<VAR>$CESM_SUF`. Variables: `docs/COUPLING_VARIABLES.md`. Reads are one hour × band levels at a time (~5.3 MB per variable-hour), so a subset suffices: ~3.6 GB for 2 days, ~160 GB for 90 days |
+| CUDA driver library | site-specific | `run_prod.sh` puts `$CUDA_DRIVER_LIB` on `LD_LIBRARY_PATH`. Where libcuda.so.1 is not on the loader path JAX **silently falls back to CPU**; set the variable, or empty it for a normal CUDA install |
+
+An env var that is set but points nowhere is an error, not a silent fallback; a
+missing CESM file names the variable that built the path.
+
+Do not activate the tomas-jax `.venv` — it is CPU-only jaxlib with no xarray. The
+working combo is **system python3** with GPU jax.
+
+## Running
+
+**`./run_prod.sh` sets every knob except the SCENARIO.** A bare run is *not* the
+production config: `INJ_SO2_TG_YR` defaults to **0 = no injection**, so a forgotten
+flag gives an obviously unforced baseline rather than a silent 10 Tg/yr SAI result.
+State the amount and give the scenario its own tag.
+
+```bash
+cd <repo>                                         # outputs land in the launch directory
+INJ_SO2_TG_YR=10 OUT_TAG=prod90d ./run_prod.sh    # the 10 Tg/yr scenario, 90 days, ~33 h
+./run_prod.sh                                     # NO-INJECTION control (INJ_SO2_TG_YR=0)
+RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d ./run_prod.sh   # continue that scenario
+```
+
+`run_prod.sh` pins a **single** GPU (`CUDA_VISIBLE_DEVICES=${GPU:-0}`) rather than
+auto-selecting one, so the card a long run lands on is never a function of what
+else happened to be idle at launch. Microphysics shards across all *visible*
+devices, so exporting more than one card is what makes it multi-GPU.
+
+**The RESUME env must match the run you are resuming.** `INJ_*` mismatches are
+refused outright (the scenario is stamped in the state ckpt); `WET_SETTLING` /
+`WET_OPTICS` / `SETTLE` / `ADV_VPOS` mismatches only WARN, because they change
+physics mid-trajectory rather than invalidating the state — a seam, not a
+corruption. Repeat the scenario flags on the resume command line; they are not read
+back from the checkpoint.
+
+Checkpoints are written **atomically** (temp file + `os.replace`) and in a fixed
+order — frames, timeseries, then state LAST — so the physics state is never newer
+than the diagnostics. A resume trims frames that ran past the state, warns about a
+frames history that stops short of it (the filmstrip would splice across the hole
+without showing it), and tolerates an unreadable timeseries ckpt by continuing with
+an empty plotted history: every cumulative counter the run needs comes from the
+state ckpt, not from there.
+
+The full effective config is printed in the run's own header, so any log is
+self-describing.
+
+## Validation harnesses
+
+```bash
+# advection conservation (the LR benchmark)
+python3 validation/test_conservation.py
+
+# where the number floor comes from, per bin / level / latitude
+STATE=path/to/coupled_state_<tag>_ckpt.npz python3 validation/floor_anatomy.py
+
+# the ADV_VPOS positivity limiter: positivity, conservation, smooth-field inactivity
+ADV_F32=1 ADV_CFL=0.5 python3 validation/validate_vpos_f32.py
+```
+
+**Validate advection changes at `ADV_F32=1 ADV_CFL=0.5`, the production
+precision — not the f64/cfl=0.2 module defaults.** Two bugs in the positivity
+limiter were invisible in f64 and fatal in f32: a `1e-300` guard that underflows to
+zero below float32's smallest normal (~1.2e-38), producing inf/NaN; and a
+reformulation that cost 2.9e-5 relative accuracy on smooth fields where f64 showed
+only 1.2e-13.
+
+**Run them from the repo root, as written above.** Python puts the *script's*
+directory on `sys.path`, never the cwd, so each harness inserts the repo root and
+`fast_advection/` itself.
+
+## Code state — why the defaults are what they are
+
+- **`BC_GAS` defaults to `flux`** whenever the aerosol faces are open, derived
+  from the resolved `BC_EDGE` so the gas and aerosol boundaries cannot desync — not
+  even under an explicit `BC_EDGE=clamp`. An unconditional `clamp` default put the
+  production config in the one incoherent corner of the four combinations: an
+  unbounded Dirichlet gas source at a level whose particles are free to leave.
+  Measured cost at 13.3 hPa over 24 h — that single level went from 0.3% to ~50% of
+  the model's **total** number as a 6–8 nm mode, continuous nucleation fed by
+  clamped H2SO4 rather than transport. What `flux` costs: the gases are no longer
+  pinned to CESM. `BC_GAS=clamp` still works and is required to reproduce runs made
+  under the old default.
+- **`WET_SETTLING` / `WET_OPTICS` default ON.** TOMAS carries dry SO4 mass, but a
+  stratospheric sulfate particle is an H2SO4/H2O solution droplet, and both the
+  settling velocity (∝ Dp, ρ_p) and the optics need the wet size. Sizing the Mie
+  tables on the dry core while using a 75 wt% *solution* refractive index — a
+  droplet already 25% water by mass, sized as if dry — underestimates 550 nm
+  extinction by ~47% for this size distribution; with the real RH/T-dependent
+  composition (40–55 wt% near the moist 143 hPa band base) the error reaches a
+  factor of 2+. Composition and density come from the same parameterizations the
+  microphysics engine applies internally (Tabazadeh 1997, Tang 1997), so settling,
+  optics and coagulation see one droplet. `=0` restores the dry sizing.
+- `INIT_BIN` defaults to `so4`. The old `dgnum` path binned MAM4 *number* by
+  `dgnumwet` and set `mas = num*MMID` without reading `so4_a*`, inflating sulfate
+  mass **4.29×** (coarse mode 6.68×).
+- `INJ_ZONAL` defaults to **1** (zonal ring). The point source is 5.6× slower and
+  drives runaway nucleation. `INJ_MIRROR=1` releases at both ±`INJ_LAT`, splitting
+  the same total 50/50 — the total is what you asked for, not doubled.
+- Diagnostic core window is **symmetric**, `-1` per end → 1.6–121.5 hPa, 22/24
+  levels, excluding exactly the two levels the reservoir is written into.
+- **`ADV_VPOS`** vertical positivity limiter in `fct_lr.py`, default **ON** and set
+  explicitly by `run_prod.sh` so the log records it. `ADV_VPOS=0` is a forensic
+  escape hatch, not a supported configuration. Lin-Rood is exactly conservative but
+  not positive; its vertical remap undershot on the steep ultrafine gradient at the
+  injection ring and the clip turned that into a spurious number source. 100% of
+  the negatives came from that one operator — the horizontal sweeps produce exactly
+  zero, being Zalesak-bounded. Measured: the floor injected ~3.3e-3 of the standing
+  number burden per 6 h step and accumulated to 35% of a day-90 standing N; 97.4%
+  of it landed below 10 nm and 0.0025% in the optically active 150–1200 nm bins, so
+  mass/AOD/ARF were always safe but total number and anything under ~10 nm were
+  not. Over 8 steps of pure advection the unlimited scheme grew the number burden
+  0.94% out of nothing; limited it sits at 0.99987.
+- `vface` diagnostic labels are `top`/`bot`. **They are FACE labels, signed
+  `+ = into slab` — not gross inflow/outflow**, and the per-column/per-substep
+  cancellation means gross inflow is not recoverable from them.
+
+## Reading the output — standing caveats
+
+- `init N burden(sum num)` and `M burden(sum mas)` in the header are **unweighted
+  sums**. Every ratio in the log normalises by the dp·cos(lat)-**weighted** `N0`
+  and `M0`, which are ~260× and ~585× larger. Never divide a logged quantity by a
+  header value.
+- First ~week of any cold start is spin-up; 90 days is a **transient**, not a
+  steady state (the sink is not burden-proportional, loss ~ M^0.35).
+- `RAD_MODE=anomaly` baseline is **time-varying** under `AER_SRC=mam4`, so reported
+  forcing is a difference against a moving target.
+- No wet removal anywhere; settling and transport out of the band are the only
+  sinks, so aerosol settling into the 100–150 hPa layer lingers.
+- `AOD550` is stratospheric-only and sulfate-only over the band. It is
+  **uncalibrated** — fine for relative work, and to be settled before quoting
+  absolute forcing.
+- The budget printout closes to roundoff (`sum` vs `M/M0-1`). If a change breaks
+  that closure, the change is wrong — that line is the model's own audit.
