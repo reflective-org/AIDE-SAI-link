@@ -124,6 +124,55 @@ The **Default** column below is the *effective* production default, i.e. what
 you get from `./run_prod.sh`; where the bare `coupling.py` module default
 differs it is noted.
 
+### If you only read one section
+
+For a first run you need at most five variables. The rest have production
+defaults for a reason — change them only with `MANIFEST.md` open.
+
+| you want to | set |
+|---|---|
+| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 ./run_prod.sh` |
+| run its control | the same, minus `INJ_SO2_TG_YR` (it defaults to 0) |
+| continue after a kill or crash | add `RESUME=1`, and **repeat the same `INJ_*` and `OUT_TAG`** |
+| move the injection | `INJ_HPA`, `INJ_LAT` (+ `INJ_MIRROR=1` for a two-hemisphere ring) |
+| share the GPU / recover from an OOM | `FAST_SORT=0` first; then `TRACER_CHUNK` (advection) or `RAD_LAT_CHUNK` (radiation), whichever phase OOMed. `FAST_CELL_CAP` is the next lever but is hard-set in `run_prod.sh`, so lower it by editing the script |
+| do a cheap dynamics-only test | `RAD=0` (drops the `jax-rrtmgp` dependency too) |
+
+### Which flags actually apply to my run?
+
+Most of the table below is inert for any given run. There are two things that
+decide which part is live: **which entry point you launched** and **which
+options you switched on**.
+
+`./run_prod.sh` execs `driver_fast.py`, which imports `coupling.py` and then
+*replaces* its microphysics with the batched `tomas_jax.fast` engine. So the
+per-cell chain's own microphysics knobs are never reached on the production
+path — the `FAST_*` ones take their place. Everything else (injection, run
+length, domain, IC/BC, transport, settling, radiation) is shared, because both
+paths run the same code for it.
+
+| you launched | microphysics knobs that are live | the ones that do nothing |
+|---|---|---|
+| `./run_prod.sh` or `python3 driver_fast.py` — **the normal case** | `ALPHA_COND`, `FAST_DT`, `FAST_CELL_CAP`, `FAST_SORT`, `FAST_FN_SCALE`, `FAST_COAG_SUB_CAP`, `FAST_COND_SUB_CAP`, `FAST_COAG_CMAX` | `MICRO_SUBSTEPS`, `N_COAG_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, all `NUC_*` |
+| `python3 coupling.py` — standalone/dev only | `MICRO_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, `ALPHA_COND`, `NUC_ORG`, `NUC_NH3`, `NUC_FION`, `NUC_FN_MAX` | every `FAST_*` |
+
+The two engines also differ *physically*, not just in speed: the fast engine's
+nucleation is **binary** (H2SO4–H2O only), which is why it has no `NUC_ORG` /
+`NUC_NH3` / `NUC_FION` to set — `FAST_FN_SCALE` is its only nucleation dial.
+
+
+Rows below marked **[chain]** are read only by the standalone `coupling.py`
+path and are ignored under `run_prod.sh`.
+
+Beyond the entry point, four switches gate whole blocks of knobs:
+
+| switch | at this setting | these stop mattering |
+|---|---|---|
+| `AER_SRC` | `mam4` (the default) | all `CARMA_*`, and `CARMA_FILE` |
+| `RAD` | `0` | the whole Radiation section, and `RRTMGP_PATH` |
+| `SETTLE` | `0` | `WET_SETTLING` |
+| `INJ_SO2_TG_YR` / `INJ_H2SO4_TG_YR` | both `0` (a control run) | the geometry knobs `INJ_HPA`, `INJ_LAT`, `INJ_LON`, `INJ_ZONAL`, `INJ_MIRROR` |
+
 ### Injection scenario — the knobs meant to change run to run
 
 | variable | default | meaning |
@@ -215,35 +264,40 @@ A variable that is *set but points nowhere* is an error, not a silent fallback.
 
 ### Microphysics and settling
 
+Under `run_prod.sh` only `MICRO`, `ALPHA_COND`, `SETTLE` and `WET_SETTLING` are
+live here; the **[chain]** rows are the standalone `coupling.py` engine's and
+are ignored. Their fast-engine counterparts are in the next section.
+
 | variable | default | meaning |
 |---|---|---|
 | `MICRO` | `full` | `full` = chemistry + nucleation + coagulation + condensation. `coag` = legacy coagulation only. `driver_fast.py` requires `full` |
-| `MICRO_SUBSTEPS` | `6` | substeps per coupling step for the per-cell chain (1 h each) |
-| `N_COAG_SUBSTEPS` | `3` | coagulation substeps |
-| `COAG_MAX_SUBSTEPS` | `256` | ceiling on adaptive coag substeps. Critical for speed — a vmapped `while_loop` runs every lane to the slowest one |
-| `CELL_CHUNK` | `300000` | cells per micro vmap batch (per-cell chain) |
-| `ALPHA_COND` | `1.0` | H2SO4 accommodation coefficient |
-| `NUC_ORG` | `1e7` | organic vapour [molec/cm³] for the nucleation scheme |
-| `NUC_NH3` | `1e9` | NH3 [pptv] |
-| `NUC_FION` | `3.0` | ion-pair production [cm⁻³ s⁻¹] |
-| `NUC_FN_MAX` | `1e6` | cap on total nucleation rate [cm⁻³ s⁻¹]; a numerical guard against gas-clamped ultrafine bursts |
+| `ALPHA_COND` | `1.0` | H2SO4 accommodation (sticking) coefficient — the fraction of vapour–particle collisions that actually condense. `1.0` = every collision sticks, the fastest condensation physically allowed. **Read by both engines** |
 | `SETTLE` | `1` | gravitational settling, the model's only true aerosol sink |
-| `WET_SETTLING` | `1` | size the settling particle as the wet H2SO4/H2O droplet; `0` restores dry-core sizing |
+| `WET_SETTLING` | `1` | size the settling particle as the wet H2SO4/H2O droplet; `0` restores dry-core sizing. Ignored when `SETTLE=0` |
+| `MICRO_SUBSTEPS` | `6` | **[chain]** substeps per coupling step (1 h each); an accuracy dial, not a stability requirement. The fast engine uses `FAST_DT` instead |
+| `COAG_MAX_SUBSTEPS` | `256` | **[chain]** ceiling on the *adaptive* coagulation solver's substeps. A speed knob: the vmapped `while_loop` runs every lane to the slowest one. A cell that hits the cap is returned **partially integrated** and logs a `coag substep cap hit` warning |
+| `CELL_CHUNK` | `300000` | **[chain]** cells per micro vmap batch — peak GPU memory vs. call overhead only. Micro is per-cell independent, so results are identical at any value |
+| `N_COAG_SUBSTEPS` | `3` | **[chain]** fixed forward-Euler substeps for the legacy `MICRO=coag` path only; dead under `MICRO=full` |
+| `NUC_ORG` | `1e7` | **[chain]** background organic vapour [molec/cm³] fed to the ternary rate. A boundary-layer value inherited from the tomas-jax SAI box model — retune before reading anything into it |
+| `NUC_NH3` | `1e9` | **[chain]** NH3 [pptv]; same caveat |
+| `NUC_FION` | `3.0` | **[chain]** ion-pair production [cm⁻³ s⁻¹] |
+| `NUC_FN_MAX` | `1e6` | **[chain]** cap on total nucleation rate [cm⁻³ s⁻¹]; a numerical guard against gas-clamped ultrafine bursts |
 
-### Fast microphysics engine (`driver_fast.py`)
+### Fast microphysics engine (`driver_fast.py`) — the production microphysics
 
-Memory/scheduling only — micro is per-cell independent, so chunk grouping cannot
-change results.
+**This is the section that applies to any run started with `run_prod.sh`.**
+Apart from `FAST_FN_SCALE`, these are memory/scheduling knobs: micro is per-cell
+independent, so how cells are grouped into chunks cannot change results.
 
 | variable | default | meaning |
 |---|---|---|
-| `FAST_DT` | `360` | inner step [s]; 60 inner steps fill one 6 h coupling step |
-| `FAST_CELL_CAP` | `50000` | max cells per chunk (module: `250000`). Lower is **faster** here, and fits alongside another job |
+| `FAST_DT` | `360` | inner step [s]; 60 inner steps fill one 6 h coupling step. The fast engine's counterpart to `MICRO_SUBSTEPS` |
+| `FAST_CELL_CAP` | `50000` | max cells per chunk (module: `250000`). Lower is **faster** here, and fits alongside another job. Counterpart to `CELL_CHUNK` |
 | `FAST_SORT` | `1` | stiffness-sort chunks, worth ~27% of micro. Does one unchunked ~8 GB allocation — **first thing to set to `0` if the card is loaded** |
-| `FAST_FN_SCALE` | `1.0` | nucleation rate scale |
-| `FAST_COAG_SUB_CAP` | `256` | coagulation substep cap |
+| `FAST_FN_SCALE` | `1.0` | nucleation rate scale — the **only** nucleation knob on this path, since the scheme is binary (no organics/NH3/ions to set) |
+| `FAST_COAG_SUB_CAP` | `256` | coagulation substep cap. Counterpart to `COAG_MAX_SUBSTEPS` |
 | `FAST_COND_SUB_CAP` | `40` | condensation substep cap |
-| `FAST_COAG_CMAX` | `0.05` | coagulation adaptive-step tolerance |
+| `FAST_COAG_CMAX` | `0.05` | coagulation adaptive-step tolerance — how much error per step is accepted, i.e. how many substeps you actually spend under the cap |
 
 ### OH chemistry
 
