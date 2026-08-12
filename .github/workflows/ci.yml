@@ -46,10 +46,17 @@ jobs:
       - name: import check
         run: python -c "import settling; print('settling imports OK')"
 
-      # Exits 1 on any failure (see its FAILED list), so the job status is real.
-      # ~12 s on CPU.
+      # Both exit 1 on any failure (see their FAILED lists), so the job status is
+      # real. ~12 s and ~2 s on CPU.
       - name: advection conservation
         run: python validation/test_conservation.py
+
+      # Closed-form physics in settling.py: Tang density, wet growth factor,
+      # slip-corrected fall speed, and the implicit sweep's conservation
+      # identity. The only physics in the tree with no GPU/CESM/tomas-jax
+      # dependency, hence the only physics CI can reach.
+      - name: settling physics
+        run: python validation/test_physics_math.py
 
   lint:
     name: lint
