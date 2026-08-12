@@ -101,6 +101,9 @@ def tang_density(wt_pct):
     x = 100*m_H2SO4/(m_SO4 + m_H2O), i.e. H2SO4-basis solute over RAW SO4+H2O
     total, which is very slightly below the true H2SO4 weight fraction. wet_size()
     below reproduces that convention exactly so optics match microphysics.
+
+    in tomas_fortran this comes from src/aerodens.f for sulfate-water mixture
+    solved for the density of this solution
     """
     x = jnp.asarray(wt_pct, dtype=jnp.float64)
     ds0 = 0.9971 + x * (7.367e-3 + x * (-4.934e-5
