@@ -27,6 +27,9 @@ jaxlib>=0.6.2
 numpy>=2.0
 xarray>=2025.0
 netCDF4>=1.7
+# scipy is not imported by this repo -- it is here for tomas-jax, which uses it
+# (physics/radiative_forcing.py) and is cloned beside rather than pip-installed,
+# so its own dependencies are never resolved for you.
 scipy>=1.15
 
 # --- analysis/plotting only (plot_run.py, gif_run.py) ---------------------

@@ -1,22 +1,20 @@
 """Fully-linked coupled run using the tomas-jax GPU-FAST reduced model.
 
-Same framework/driver as coupling_carma.py on the emulator-parity framework, with
-ONE difference: the microphysics engine is the natively-batched reduced model
-`tomas_jax.fast` (gpu-fast branch) instead of the hand-assembled per-cell chain
-(coupling.run_microphysics_full). Advection is the same fct_fast swap.
+Runs coupling.py with ONE difference: the microphysics engine is the
+natively-batched reduced model `tomas_jax.fast` (gpu-fast branch) instead of the
+hand-assembled per-cell chain (coupling.run_microphysics_full). Advection is the
+same fct_lr swap coupling.py already uses, so the two agree on transport.
 
-IC/BC source is coupling.py's default, AER_SRC=mam4 (per-step dynamic from the CESM
-hourly series). The 'carma' in this file's name is lineage only -- it was forked
-from coupling_carma.py and used to force the static CARMA reservoir. Pass
-AER_SRC=carma to get that back.
+IC/BC source is coupling.py's default, AER_SRC=mam4 (per-step dynamic from the
+CESM hourly series). Pass AER_SRC=carma for the static CARMA reservoir instead.
 
 Why a separate driver (not just an env flag):
   * `tomas_jax.fast` is a DIFFERENT engine with its own batched API
     (FastState / run_fast) -- we monkeypatch coupling.run_microphysics_full with
     a shim that maps coupling's per-cell state <-> FastState and calls run_fast.
   * The fast model is HARD-FIXED at 40 bins, aerosol SO4+H2O (ICOMP=2), gases
-    H2SO4+SO2. So this driver runs at NATIVE 40 bins (does NOT set N_BINS=20 like
-    coupling_carma.py). At 40 bins coupling's XK == the fast model's grid exactly
+    H2SO4+SO2. So this driver runs at NATIVE 40 bins and does NOT set N_BINS at
+    all -- it exits if you do. At 40 bins coupling's XK == the fast model's grid exactly
     (both make_grid(40, XK0, 2.0)), so num/mas are already on the right grid.
   * Reduced physics differs from the 20-bin physical reference: Dunne-2016
     neutral-binary nucleation (no org/NH3/ion ternary terms), so nucleation and
@@ -41,7 +39,7 @@ import functools
 
 import numpy as np
 
-# --- env defaults: mirror coupling_carma.py EXCEPT the N_BINS override ---
+# --- env defaults for this driver (N_BINS is deliberately NOT set: see below) ---
 os.environ.setdefault('RAD', '1')
 os.environ.setdefault('RAD_MODE', 'anomaly')
 os.environ.setdefault('RAD_EVERY', '1')
@@ -118,7 +116,7 @@ if C.NBINS != FAST_NBINS:
     sys.exit(f"driver_fast: coupling NBINS={C.NBINS} != fast NBINS="
              f"{FAST_NBINS}; do not set N_BINS for this driver")
 
-# ---- the advection swap (identical to coupling_carma.py) --------------------
+# ---- the advection swap (same scheme coupling.py binds for itself) ----------
 _ADV_CFL = float(os.environ.get('ADV_CFL', '0.5'))
 _ADV_DTYPE = jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float64
 # ADV_SCHEME selects the transport form:

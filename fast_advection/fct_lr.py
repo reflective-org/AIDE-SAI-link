@@ -178,7 +178,7 @@ def _lr_vert(rho, rhoq, dp, dt, w_face, bc_top=None, bc_bot=None):
 # 3q-2qR / 3q-2qL can too. coupling.py then clips the negatives to zero and
 # CREATES number (mass has a budgeted `floor` term; number's was never budgeted).
 #
-# MEASURED 2026-07-29 on real states (scratchpad/floor_anatomy.py):
+# MEASURED 2026-07-29 on real states (validation/floor_anatomy.py):
 #   * 100% of the negatives come from THIS operator. The horizontal x/y sweeps
 #     produce exactly zero (0/40 bins) because _lr_sweep's Zalesak step bounds
 #     the update to neighbour min/max, which is already positivity-preserving.

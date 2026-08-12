@@ -101,6 +101,12 @@
 #   0.94% out of nothing; limited it sits at 0.99987.
 #   NB it also fixes the MASS floor (2.4e6 negative cells in the mass field).
 #
+# NB every example below invokes the launcher as `$REPO/run_prod.sh`, where $REPO
+# is wherever this checkout lives. That is not decoration: outputs are written to
+# the CURRENT DIRECTORY and this script REFUSES to run with the repo as $PWD, so
+# every real invocation is from a runs directory by path. See the block above
+# `HERE=` further down for why.
+#
 # TO RESUME after a crash/kill: re-run this script with RESUME=1 prepended. It
 # picks up coupled_state_prod90d_ckpt.npz (validated bit-exact). Kill it by PID,
 # not by script name. NOTE a RESUME across an ADV_VPOS change is not meaningful --
@@ -117,7 +123,7 @@ set -euo pipefail
 # .gitignore hid rather than prevented. Outputs go to the CURRENT DIRECTORY instead
 # -- every output path in coupling.py and plot_run.py is cwd-relative -- so launch
 # from a runs directory outside the repo:
-#   cd ~/noah/coupling_runs && INJ_SO2_TG_YR=10 OUT_TAG=prod90d ~/noah/coupling_prod/run_prod.sh
+#   cd <runs dir> && INJ_SO2_TG_YR=10 OUT_TAG=prod90d /path/to/repo/run_prod.sh
 # Nothing on the import path needs the cwd: coupling.py resolves tomas-jax and
 # jax-rrtmgp from its own __file__ (_dep_path/_HERE), radiation.py resolves
 # rad_data/ the same way, and python3 puts the script's own directory on sys.path.
@@ -135,7 +141,8 @@ if [[ "$(readlink -f "$PWD")" == "$HERE" ]]; then
     echo "run_prod.sh: refusing to run with the repo itself as the working directory." >&2
     echo "             Outputs are written to \$PWD, and they do not belong in the" >&2
     echo "             source tree. Launch from a runs directory instead:" >&2
-    echo "                 cd ~/noah/coupling_runs && $(readlink -f "$0")" >&2
+    echo "                 cd <a directory outside the repo>" >&2
+    echo "                 $(readlink -f "$0")" >&2
     exit 2
 fi
 
@@ -143,20 +150,20 @@ fi
 # instead of being copied into a near-duplicate script that then drifts. They were
 # bare literals until 2026-07-31, which meant an outside `N_HOURS=8760` was
 # accepted by the shell and then silently discarded -- the run would have quietly
-# stopped at 90 days. Defaults are unchanged, so a bare ./run_prod.sh is the same
+# stopped at 90 days. Defaults are unchanged, so a bare run_prod.sh is the same
 # run it has always been.
 # To push the 90-day run out to a full year:
-#   RESUME=1 N_HOURS=8760 OUT_TAG=prod1yr ./run_prod.sh
+#   RESUME=1 N_HOURS=8760 OUT_TAG=prod1yr $REPO/run_prod.sh
 # after seeding the prod1yr checkpoints from the prod90d ones.
 #
 # FAST_SORT is overridable for the same reason: an OOM fallback that relaunches with
 # FAST_SORT=0 is useless if the launcher swallows the override and goes straight back
 # into the same OOM.
 # INJECTION SCENARIO -- the knobs meant to change run to run. Every default below is
-# coupling.py's own default, so a bare ./run_prod.sh is byte-for-byte the run it
+# coupling.py's own default, so a bare run_prod.sh is byte-for-byte the run it
 # always was (verified: step-1 prognostics bit-identical to the reference run).
 #
-# INJ_ZONAL was a bare literal until 2026-08-03, so `INJ_ZONAL=0 ./run_prod.sh` was
+# INJ_ZONAL was a bare literal until 2026-08-03, so `INJ_ZONAL=0 run_prod.sh` was
 # accepted by the shell and then silently discarded -- you would have got a zonal
 # ring anyway and no warning. Same failure mode that already bit N_HOURS and
 # FAST_SORT. The other four were never listed here at all; they did pass through by
@@ -174,14 +181,14 @@ fi
 #                  45N and 45S; the TOTAL is 10, not doubled). No-op at INJ_LAT=0.
 #
 # REPRODUCING the prod90d / prod1yr runs now needs the amount stated explicitly:
-#   INJ_SO2_TG_YR=10 OUT_TAG=prod90d GPU=0 ./run_prod.sh
+#   INJ_SO2_TG_YR=10 OUT_TAG=prod90d GPU=0 $REPO/run_prod.sh
 #
 # ALWAYS pair a scenario with its own OUT_TAG -- outputs and checkpoints are keyed
 # by it, so reusing a tag overwrites the other scenario's results. coupling.py
 # refuses a RESUME onto a checkpoint whose injection config differs, which catches
 # the dangerous half of that mistake but not a fresh-run overwrite.
-#   OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 GPU=0 ./run_prod.sh
-#   OUT_TAG=inj5_eq_pt INJ_SO2_TG_YR=5 INJ_ZONAL=0 INJ_LON=120 GPU=0 ./run_prod.sh
+#   OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 GPU=0 $REPO/run_prod.sh
+#   OUT_TAG=inj5_eq_pt INJ_SO2_TG_YR=5 INJ_ZONAL=0 INJ_LON=120 GPU=0 $REPO/run_prod.sh
 # The resolved geometry is echoed in the run header ("SAI injection: ... at ...").
 # ============================================================================
 # ENVIRONMENT -- inlined 2026-08-04

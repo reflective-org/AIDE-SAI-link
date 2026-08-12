@@ -4,14 +4,15 @@
 [![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](./LICENSE)
 
-One-way coupled **CESM → TOMAS-JAX** sectional aerosol model for stratospheric
-aerosol injection (SAI), in JAX on GPU.
+**CESM → TOMAS-JAX** sectional aerosol model for stratospheric aerosol injection
+(SAI), in JAX on GPU. The CESM forcing is one-way; aerosol, radiation and
+microphysics are fully coupled to each other.
 
 > [!NOTE]
 > CI covers what a GPU-less runner without the CESM archive can cover: that the
-> tree imports, and that advection still conserves mass. The physics validation
-> in `validation/` runs on a GPU box, not here — see
-> [Running Tests](#running-tests).
+> tree imports, that advection still conserves mass, and that the closed-form
+> settling physics is unchanged. The rest of the validation needs a GPU and the
+> CESM archive — see [docs/VALIDATION.md](./docs/VALIDATION.md).
 
 > [!WARNING]
 > This project is under active development, there is no guarantee that it will
@@ -19,9 +20,14 @@ aerosol injection (SAI), in JAX on GPU.
 > radiative forcing** — see the standing caveats in [MANIFEST.md](./MANIFEST.md)
 > before quoting any number from it.
 
-CESM meteorology forces the aerosols, but there is no feedback from the aerosols to the
-circulation. The aerosols in the stratosphere are internally generated
-and internally removed:
+**What "one-way" does and does not mean.** CESM meteorology is prescribed: the
+winds are read hour by hour and nothing this model does ever changes them, so
+there is no dynamical response — no self-lofting, no altered Brewer-Dobson
+ascent — and nothing propagates back to CESM. *Inside* that forcing, though,
+the loop closes: the aerosol sets the optics, the optics heat the layer, and
+that heating accumulates into the temperature which the microphysics, the
+settling and the next radiation call all see. Aerosol in the band is internally
+generated and internally removed:
 
 ```
 CESM h1 hourly ──► U, V, OMEGA ──────► transport (Lin-Rood flux-form)
@@ -32,12 +38,31 @@ CESM h1 hourly ──► U, V, OMEGA ──────► transport (Lin-Rood f
   SOURCE  continuous SO2 injection    SO2 ─OH─► H2SO4 ─► nucleation/condensation
   SINK    gravitational settling out of the band bottom
   OPTICS  RRTMGP + Mie on the wet H2SO4/H2O droplet ──► heating, AOD550, ARF_toa
+
+  CLOSED LOOP   aerosol ─► optics ─► heating ─► dT accumulates into T
+                    ▲                                    │
+                    └──── microphysics + settling ◄───────┘
+  NOT CLOSED    U, V, OMEGA are CESM's throughout; the circulation never responds
 ```
 
 - **State**: 40 TOMAS bins × (number, dry SO4 mass) + 2 gas tracers = 82
   advected 3-D fields, on the native CESM f09 grid (192 × 288) over a
   1–150 hPa band (24 levels), 6 h coupling step.
 - **Scale**: a 90-day run is ~33 h on one H100; microphysics is ~94% of it.
+
+## Scope, and where this is going
+
+Read this as a **dycore–aerosol–radiation coupler**. **This version has CESM,
+TOMAS and RRTMGP plugged in**, and every number, default and validation on this
+page refers to that combination.
+
+The intent is for each slot to be swappable — other meteorology sources
+including emulated dycores, and other aerosol schemes (CARMA, MAM, GLOMAP).
+Some of that seam already exists: `AER_SRC` selects the aerosol IC/BC source
+(`mam4` or `carma`), and `driver_fast.py` swaps the microphysics engine into
+`coupling.py` at import rather than branching inside it. The meteorology reader
+is **not** generic yet — it expects the CESM `h1` layout — so treat a new
+forcing source as work, not configuration.
 
 ## Installation
 
@@ -79,8 +104,8 @@ the working directory, so that directory is where the run lands — and a single
 itself as the working directory rather than let that happen silently.
 
 ```bash
-REPO=~/noah/coupling_prod          # wherever this clone lives
-mkdir -p ~/noah/coupling_runs && cd ~/noah/coupling_runs
+REPO=~/aide_sai_core               # wherever this clone lives
+mkdir -p ~/sai_runs && cd ~/sai_runs   # anywhere BUT the repo
 
 # 1-step smoke test: N_HOURS=6 is one 6 h coupling step, ~6 min on an H100.
 N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/run_prod.sh
@@ -133,7 +158,7 @@ in the run header, so any log is self-describing. Set them by prefixing the
 launcher:
 
 ```bash
-OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 ~/noah/coupling_prod/run_prod.sh
+OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/run_prod.sh
 ```
 
 **The complete reference is [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** —
@@ -147,7 +172,7 @@ defaults for a reason — change them only with `MANIFEST.md` open.
 
 | you want to | set |
 |---|---|
-| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 run_prod.sh` |
+| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 $REPO/run_prod.sh` |
 | run its control | the same, minus `INJ_SO2_TG_YR` (it defaults to 0) |
 | continue after a kill or crash | add `RESUME=1`, and **repeat the same `INJ_*` and `OUT_TAG`** |
 | move the injection | `INJ_HPA`, `INJ_LAT` (+ `INJ_MIRROR=1` for a two-hemisphere ring) |
@@ -163,24 +188,6 @@ defaults for a reason — change them only with `MANIFEST.md` open.
 Every default, and the reasoning behind it, is in
 **[MANIFEST.md](./MANIFEST.md) — the canonical reference for this tree.** Where
 `docs/` disagrees with it, MANIFEST is current.
-
-## Running Tests
-
-```bash
-python3 $REPO/validation/test_conservation.py                        # advection conservation
-# needs a checkpoint, so run it from your runs directory (or set STATE=<path>)
-ADV_F32=1 ADV_CFL=0.5 python3 $REPO/validation/validate_vpos_f32.py  # positivity limiter
-```
-
-These resolve the repo from their own location, so they run from anywhere. The
-ones that read a checkpoint (`validate_vpos_f32.py`, `floor_anatomy.py`) take it
-from the working directory by default, and the one that draws a figure
-(`validate_radiation.py`) writes it there — so run them where your output lives,
-not in the repo.
-
-Validate advection changes at `ADV_F32=1 ADV_CFL=0.5`, the production precision
-— **not** the f64/cfl=0.2 module defaults: two positivity-limiter bugs were
-invisible in f64 and fatal in f32.
 
 ## Citations
 

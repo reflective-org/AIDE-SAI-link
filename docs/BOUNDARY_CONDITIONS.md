@@ -47,11 +47,11 @@ day-of-year-cyclic climatology of exactly the fields the BCs consume:
   IC in months, so this costs nothing.
 
 Runtime then linearly interpolates in day-of-year and cycles forever. One
-`.npz` of a few MB replaces the entire `/data/cesm2.1.5_output` dependence.
+`.npz` of a few MB replaces the entire `$CESM_DIR` archive dependence.
 
 ## Per-boundary physics
 
-**Bottom (~100 hPa).** Two distinct roles, now separable:
+**Bottom (~150 hPa, the production `P_HI_HPA`).** Two distinct roles, now separable:
 * *outflow* — settling already exits through an open bottom face
   (`settling.py`), independent of any reservoir. Advective export into the
   pinned bottom slab is likewise absorbed by the reset. Sink: solved.
@@ -92,7 +92,7 @@ that dependence disappears by construction. Two things to watch:
   smooth functions of T, so emulator-grade T is fine.
 
 **Radiation.** Stays physical (rrtmgp + Mie) because the NN radiation
-emulator is aerosol-blind (see memory: unusable for SAI forcing). Its
+emulator is aerosol-blind, and therefore unusable for SAI forcing. Its
 non-aerosol inputs (trace gases, surface albedo/T) come from the same
 climatology file. Anomaly mode's *reference aerosol* should switch from
 "MAM4 binned at this hour" to "climatological binned background", which is

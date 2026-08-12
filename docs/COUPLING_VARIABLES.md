@@ -98,7 +98,7 @@ Advected tracer count = 2·NBINS + 2 (num+mas per bin, plus SO₂, H₂SO₄) = 
 
 ### Aerosol source & bin grid
 `AER_SRC` (`carma`|`mam4`), `N_BINS` (0→native 40), `CARMA_FILE`, `CARMA_FRAME`,
-`CARMA_RHO` (1923), `INIT_BIN` (`dgnum`|modal), `INIT_SIGMA`.
+`CARMA_RHO` (1923), `INIT_BIN` (`so4`, the default | `dgnum`, legacy), `INIT_SIGMA`.
 
 ### Microphysics
 `MICRO` (`full`|`coag`), `MICRO_SUBSTEPS` (6), `N_COAG_SUBSTEPS`,
@@ -136,13 +136,15 @@ chain at `MICRO_SUBSTEPS`, the fast driver at 6 h/`FAST_DT` = 60 samples/step fe
 
 ### SAI injection source
 `INJ_SO2_TG_YR`, `INJ_H2SO4_TG_YR` (rates), `INJ_HPA` (altitude), `INJ_LAT`,
-`INJ_LON`, `INJ_ZONAL`. All 0 = background baseline.
+`INJ_LON`, `INJ_ZONAL`, `INJ_MIRROR`. Both **rates** at 0 = no-injection control
+(the default); the geometry knobs are then inert.
 
 ### Radiation
 `RAD` (on/off), `RAD_MODE` (`anomaly`), `RAD_EVERY`, `CO2_PPM` (380), `N2O_PPB` (319).
 
 ### Fast reduced model (`driver_fast.py`, tomas_jax.fast)
-`FAST_DT` (360 s inner step), `FAST_CELL_CAP` (250000 cells/chunk),
+`FAST_DT` (360 s inner step), `FAST_CELL_CAP` (module 250000 cells/chunk;
+`run_prod.sh` hard-sets **50000**, which is faster — see MANIFEST),
 `FAST_FN_SCALE` (nucleation scale), `FAST_COAG_SUB_CAP` (256),
 `FAST_COND_SUB_CAP` (40), `FAST_COAG_CMAX` (0.05), `FAST_SORT` (stiffness-sort).
 
@@ -168,8 +170,32 @@ chain at `MICRO_SUBSTEPS`, the fast driver at 6 h/`FAST_DT` = 60 samples/step fe
 ---
 
 ## 8. Outputs / diagnostics produced
-Timeseries (`coupled_timeseries_<TAG>.npz`): `N0,M0`, `Nburden`, `Mburden`, `nsub`,
-`Nmin/Nmax`, `meanDp_nm`, `meanDp_num_nm`, `clipMadd/rem_cum`, budget terms
-`B_adv_np,B_adv_pol,B_floor,B_micro,B_bc,B_settle`, `SO2burden`, `H2SO4burden`,
-`injSO2_cum`, `settleM_cum`, `dT_min/max/rms`, `arf_toa`, `aod550`.
-Frames (`coupled_frames_<TAG>.npz`): probe-level `num,mas,dT,so2,h2so4` + `xk`, `frame_hours`.
+
+The authoritative list is the `ts = {k: [] for k in (...)}` literal in
+`coupling.py` — check it there if this section looks short, since new
+diagnostics are added by extending that tuple.
+
+**Timeseries** (`coupled_timeseries_<TAG>.npz`), one value per coupling step:
+
+| group | keys |
+|---|---|
+| normalizers | `N0`, `M0` (scalars, not series) |
+| time | `hours` |
+| burdens | `Nburden`, `Mburden`, `SO2burden`, `H2SO4burden` |
+| size | `meanDp_nm`, `meanDp_num_nm`, `meanDp_mass_nm`, `reff_nm` |
+| budget (cumulative, fractions of M0) | `B_adv_np`, `B_adv_pol`, `B_floor`, `B_micro`, `B_bc`, `B_settle`, `B_vf_in`, `B_vf_out` |
+| radiation | `dT_min`, `dT_max`, `dT_rms`, `arf_toa`, `arf_toa_avg`, `aod550` |
+| accounting | `nsub`, `Nmin`, `Nmax`, `Nfloor_cum`, `clipMadd_cum`, `clipMrem_cum`, `injSO2_cum`, `settleM_cum` |
+
+**Frames** (`coupled_frames_<TAG>.npz`), probe-level snapshots every
+`FRAME_EVERY` hours: `frames_num`, `frames_mas`, `frames_dT`, `frames_so2`,
+`frames_h2so4`, plus `frame_hours`, `probe_hpa` and `xk`.
+
+**Both files also carry the run's configuration stamp** — `inj_cfg` /
+`inj_cfg_keys` (the injection scenario) and `phys_cfg` / `phys_cfg_keys` (the
+physics-mode flags). `RESUME` compares these: an `INJ_*` mismatch is refused
+outright, a physics-mode mismatch only warns. Both arrays are append-only, so
+adding a field must not lock out older checkpoints.
+
+Older runs may lack the newer keys (`prod90d`, for instance, predates
+`reff_nm`); `plot_run.py` degrades rather than failing when one is absent.

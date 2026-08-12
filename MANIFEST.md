@@ -4,6 +4,23 @@ The canonical reference for this tree: what each file is, every knob, and **why
 each default is what it is**. `README.md` is the orientation; where `docs/`
 disagrees with this file, this file is current.
 
+## Scope
+
+**This tree is CESM + TOMAS + RRTMGP**, and every default, measurement and
+caveat recorded here refers to that combination. The intended end state is a
+model-agnostic dycore–aerosol–radiation coupler: swappable meteorology (including
+emulated dycores, which would close the circulation feedback the current setup
+lacks) and swappable aerosol schemes (CARMA, MAM, GLOMAP).
+
+Where that seam already exists, it is deliberate and worth preserving:
+
+| slot | how it is already swappable | how far |
+|---|---|---|
+| aerosol IC/BC source | `AER_SRC=mam4\|carma` | real, both paths run |
+| microphysics engine | `driver_fast.py` monkeypatches `tomas_jax.fast` into `coupling.py` at import instead of branching inside it | real, and why the driver is a separate file |
+| radiation | `RAD=0` drops it and the `jax-rrtmgp` dependency entirely | on/off only |
+| meteorology | none — the reader expects the CESM `h1` layout and variable names | a new source is work, not configuration |
+
 ## Layout
 
 Core modules are **flat on purpose** — `coupling.py` does bare
@@ -31,13 +48,17 @@ rad_data/                   palmer_williams_h2so4.dat (HITRAN Aerosols-2016)
 run_prod.sh                 the production launcher (self-documenting header)
 plot_run.py                 the three post-run figures (dashboard, filmstrip, size dist)
 gif_run.py                  animated versions of the filmstrip panels
-docs/                       PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
+docs/                       CONFIGURATION (every env var), VALIDATION (the harnesses),
+                            PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
 validation/                 harnesses -- see below
+.github/workflows/ci.yml    CI: the two self-contained tests + a ruff errors-only gate
 ```
 
 **Analysis scripts are flat and read `coupled_*_<TAG>.npz` from the current working
 directory**, so run them from wherever the outputs are. Outputs land in whatever
-directory you launch from, and `.gitignore` excludes `*.npz/*.png/*.gif/*.log`.
+directory you launch from, and `.gitignore` excludes `*.npz/*.png/*.gif/*.log`
+— which hides a misplaced run rather than preventing it, so `run_prod.sh`
+refuses to start with the repo as `$PWD`. Keep a runs directory outside the tree.
 
 ## Setup from a fresh clone
 
@@ -47,7 +68,8 @@ git clone https://github.com/reflective-org/tomas-jax                 # beside i
 git clone https://github.com/climate-analytics-lab/jax-rrtmgp         # ditto
 pip install -r aide_sai_core/requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusable for production
-cd aide_sai_core && N_HOURS=6 OUT_TAG=smoke ./run_prod.sh    # smoke test first
+mkdir -p runs && cd runs                                     # outputs go OUTSIDE the repo
+N_HOURS=6 OUT_TAG=smoke ../aide_sai_core/run_prod.sh         # smoke test first
 ```
 
 | dependency | not shipped because | how it is found |
@@ -65,17 +87,29 @@ working combo is **system python3** with GPU jax.
 
 ## Running
 
-**`./run_prod.sh` sets every knob except the SCENARIO.** A bare run is *not* the
+**`run_prod.sh` sets every knob except the SCENARIO.** A bare run is *not* the
 production config: `INJ_SO2_TG_YR` defaults to **0 = no injection**, so a forgotten
 flag gives an obviously unforced baseline rather than a silent 10 Tg/yr SAI result.
 State the amount and give the scenario its own tag.
 
+**Launch from a runs directory, never the repo.** Every output path is relative
+to the working directory, so that directory is where the run lands.
+`run_prod.sh` **refuses to start** with the repo as `$PWD` — the mistake is
+otherwise invisible, since `.npz`/`.png` are gitignored and a misplaced run looks
+entirely normal while filling the tree (29 GB accumulated that way before
+2026-08-12). The script still execs `driver_fast.py` from its own tree, so it
+runs the code you edited regardless of where you launched it.
+
 ```bash
-cd <repo>                                         # outputs land in the launch directory
-INJ_SO2_TG_YR=10 OUT_TAG=prod90d ./run_prod.sh    # the 10 Tg/yr scenario, 90 days, ~33 h
-./run_prod.sh                                     # NO-INJECTION control (INJ_SO2_TG_YR=0)
-RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d ./run_prod.sh   # continue that scenario
+cd <runs dir>                                     # NOT the repo; outputs land here
+REPO=/path/to/aide_sai_core
+INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh   # the 10 Tg/yr scenario, 90 days, ~33 h
+$REPO/run_prod.sh                                    # NO-INJECTION control (INJ_SO2_TG_YR=0)
+RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh   # continue that scenario
 ```
+
+Two checkouts launched from the *same* runs directory with the same `OUT_TAG`
+overwrite each other. `OUT_TAG` discipline is what keeps runs apart.
 
 `run_prod.sh` pins a **single** GPU (`CUDA_VISIBLE_DEVICES=${GPU:-0}`) rather than
 auto-selecting one, so the card a long run lands on is never a function of what
@@ -102,27 +136,51 @@ self-describing.
 
 ## Validation harnesses
 
+Two kinds, and the difference matters — `docs/VALIDATION.md` has the full
+inventory. **Automated tests** are self-contained (fixed seed, no GPU, no CESM,
+no sibling repos), exit non-zero on failure, and run in CI on every push:
+
 ```bash
 # advection conservation (the LR benchmark)
-python3 validation/test_conservation.py
+python3 $REPO/validation/test_conservation.py
 
-# where the number floor comes from, per bin / level / latitude
-STATE=path/to/coupled_state_<tag>_ckpt.npz python3 validation/floor_anatomy.py
-
-# the ADV_VPOS positivity limiter: positivity, conservation, smooth-field inactivity
-ADV_F32=1 ADV_CFL=0.5 python3 validation/validate_vpos_f32.py
+# closed-form settling physics: Tang density, wet growth factor, fall speed,
+# and that the implicit sweep changes the burden only by its bottom outflow
+python3 $REPO/validation/test_physics_math.py
 ```
 
-**Validate advection changes at `ADV_F32=1 ADV_CFL=0.5`, the production
-precision — not the f64/cfl=0.2 module defaults.** Two bugs in the positivity
-limiter were invisible in f64 and fatal in f32: a `1e-300` guard that underflows to
-zero below float32's smallest normal (~1.2e-38), producing inf/NaN; and a
-reformulation that cost 2.9e-5 relative accuracy on smooth fields where f64 showed
-only 1.2e-13.
+**Investigations** load a real run and print diagnostics for a human to read;
+there is no pass/fail. Run them from the directory holding the output, since
+that is where they look for a checkpoint and where they write any figure:
 
-**Run them from the repo root, as written above.** Python puts the *script's*
-directory on `sys.path`, never the cwd, so each harness inserts the repo root and
-`fast_advection/` itself.
+```bash
+# where the number floor comes from, per bin / level / latitude
+STATE=path/to/coupled_state_<tag>_ckpt.npz python3 $REPO/validation/floor_anatomy.py
+
+# the ADV_VPOS positivity limiter: positivity, conservation, smooth-field inactivity
+python3 $REPO/validation/validate_vpos_f32.py
+```
+
+**A change to advection confirmed only in float64 is not confirmed.** Two bugs
+in the positivity limiter were invisible in f64 and fatal in f32: a `1e-300`
+guard that underflows to zero below float32's smallest normal (~1.2e-38),
+producing inf/NaN; and a reformulation that cost 2.9e-5 relative accuracy on
+smooth fields where f64 showed only 1.2e-13.
+
+In practice you set nothing: `validate_vpos_f32.py` already defaults to
+`ADV_CFL=0.5` / `ADV_F32=1`, and `coupling.py` and `driver_fast.py` pin the same
+values explicitly, so the `ADV_F32=1 ADV_CFL=0.5` prefix these commands once
+carried is a no-op. The rule binds in exactly one place: calling
+`fct_lr.advect_hour_batch` **directly**, e.g. from a new test. Its signature
+defaults (`cfl=0.2`, `float64`) are a configuration no run uses, so a bare call
+passes for reasons that do not transfer. See `docs/VALIDATION.md`.
+
+**Run the harnesses by absolute path from wherever the output is, not from the
+repo.** Python puts the *script's* directory on `sys.path`, never the cwd, so
+each one inserts the repo root and `fast_advection/` itself and works from any
+directory. What they take from the cwd is the checkpoint they read
+(`validate_vpos_f32.py`, `floor_anatomy.py`; override with `STATE=<path>`) and
+where `validate_radiation.py` drops its figure.
 
 ## Code state — why the defaults are what they are
 

@@ -1,21 +1,23 @@
-# One-way coupled CESM → TOMAS aerosol model
+# CESM → TOMAS aerosol model — design rationale
 
-> **`MANIFEST.md` in the repo root is canonical for the current tree.** This file
-> documents the original coag-only design and its rationale; where the two
-> disagree, MANIFEST is current. File names and defaults here were re-checked
-> against the tree on 2026-08-04, but the physics narrative below still describes
-> the pre-SAI scope except where the SAI section says otherwise.
+> **`MANIFEST.md` in the repo root is canonical for the current tree**, and
+> `../README.md` is the orientation. This file is kept for the *design rationale*
+> behind the grid, the MAM4 initialization and the open boundaries — the parts
+> that have not changed. Where it disagrees with MANIFEST, MANIFEST is current.
+> Numbers here were re-checked against the tree on 2026-08-12.
 
-Combines the flux-corrected PPM advection from `../advection/fct.py` with the
-sectional coagulation microphysics from `../tomas-jax`, driven **one-way** by
-CESM meteorology (CESM forces the aerosol; the aerosol does not feed back).
-Production transport has since moved to the Lin-Rood scheme in
-`fast_advection/fct_lr.py`; `fct.py` remains the lineage and the source of the
-pressure convention described below.
+Combines flux-form advection with the sectional microphysics from `../tomas-jax`,
+driven **one-way** by CESM meteorology — one-way meaning *to CESM*: the winds are
+prescribed and the circulation never responds. The aerosol–radiation–microphysics
+loop inside that forcing is closed (see [Not included](#not-included-the-one-way-scope)).
+Production transport is the Lin-Rood scheme in
+`fast_advection/fct_lr.py`; the older PPM+FCT `fct.py` is the lineage and the
+source of the pressure convention described below.
 
 ```
-CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (fct PPM+FCT)
-                     └───► T, pressure     ──► microphysics (TOMAS coagulation)
+CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (Lin-Rood flux form)
+                     ├───► T, p, RELHUM    ──► microphysics (TOMAS, 40 bins)
+                     └───► SO2, H2SO4, OH  ──► gas-phase chemistry
 ```
 
 ## Files
@@ -32,12 +34,15 @@ CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (fct PPM+FCT
 | `gif_run.py`   | Animated versions of the filmstrip panels. |
 
 ## State (what is tracked & advected)
-Two moments **per size bin only** — no per-species chemistry:
+Two moments per size bin — no per-species aerosol chemistry:
 - `num[bin]` — number mixing ratio `[#/kg air]`
 - `mas[bin]` — total dry-mass mixing ratio `[kg/kg air]`
 
-40 TOMAS bins ⇒ **80 advected 3-D tracer fields** on the native f09 grid
-(192×288) over the stratospheric band (1–1000 hPa ⇒ 43 model levels).
+plus two gas tracers, `SO2` and `H2SO4`.
+
+40 TOMAS bins ⇒ 80 aerosol fields + 2 gases = **82 advected 3-D tracer fields**
+on the native f09 grid (192×288) over the stratospheric band (**1–150 hPa ⇒ 24
+model levels**, 1,327,104 cells). The band is set by `P_LO_HPA` / `P_HI_HPA`.
 
 ## Method / assumptions
 1. **Grid & pressure.** Native CESM grid; level pressures use the reference-`PS`
@@ -52,11 +57,14 @@ Two moments **per size bin only** — no per-species chemistry:
    mass (single fixed density). Number is conserved exactly; mass to ~2%.
    *Coarse-mode dust/sea-salt mass is not carried separately — only sulfate;
    all mass is lumped as one dry-mass moment.*
-3. **Transport.** Each hour, all 80 tracers advect with `fct`'s validated
-   PPM + Zalesak-FCT scheme, winds linearly interpolated across the hour,
-   CFL-limited vertical sub-stepping, polar caps (|lat|>80°) pinned to hourly
-   MAM4 (refreshed each hour, not frozen at the IC). Batched with `jax.vmap`
-   over the tracer axis; shared winds.
+3. **Transport.** All 82 tracers advect together each step with the Lin-Rood
+   flux-form scheme (`fct_lr.py`; the PPM + Zalesak-FCT `fct` core is the
+   lineage), winds linearly interpolated across the step, CFL-limited vertical
+   sub-stepping. Polar caps (|lat|>80°) are stirred to one well-mixed cell per
+   level, mass-conservingly (`ADV_POLAR=zonal`, the default) rather than
+   overwritten from MAM4 — the old reservoir overwrite discarded mass. Batched
+   with `jax.vmap` over the tracer axis; shared winds, so the substep count is
+   common to all and the batch is exact.
 4. **Microphysics.** Brownian coagulation (`tomas_jax` forward-Euler + MNFIX),
    `vmap`ped over all grid cells in memory-bounded chunks. Mixing ratios are
    converted to per-m³ concentrations with local air density `ρ = p/(Rd·T)`
@@ -75,9 +83,9 @@ Two moments **per size bin only** — no per-species chemistry:
 6. **Open vertical boundaries** (same rationale as `../advection/fct_openbc.py`).
    The top `N_BC_TOP` and bottom `N_BC_BOT` band levels are reset every hour to
    hourly CESM MAM4 binned onto the TOMAS grid. These Dirichlet reservoirs carry
-   the net effect of all physics outside the coag-only scope (emissions,
-   nucleation, condensation, wet removal), making the band a flux-through
-   system rather than a sealed one. Number and mass are always pinned as a
+   the net effect of all physics outside the band (emissions, wet removal, and
+   everything below the tropopause), making the band a flux-through system
+   rather than a sealed one. Number and mass are always pinned as a
    consistent `(Nk, Mk)` pair from one binning — never rescaled separately.
    **No global mass fixer**: with open boundaries the burden legitimately
    changes, and forcing `M0` would cancel the flux-through.
@@ -122,6 +130,14 @@ N_DAYS=365 OUT_TAG=1yr python3 coupling.py
 ```
 
 ### Environment knobs
+
+> These are the **`coupling.py` module defaults** — what you get running
+> `python3 coupling.py` directly. They are NOT what a production run uses:
+> `run_prod.sh` overrides or hard-sets many of them (`OUT_TAG`, `DEBUG`,
+> `PROFILE`, `FAST_CELL_CAP`, …). For the effective production values, and for
+> the knobs this table does not list, see
+> [CONFIGURATION.md](./CONFIGURATION.md), which is authoritative.
+
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `N_DAYS` / `N_HOURS` | 2 / — | run length (`N_HOURS` overrides) |
@@ -160,11 +176,10 @@ to `--user` (needed to import `tomas_jax.solvers.diffrax`; coagulation uses the
 forward-Euler path, not diffrax itself).
 
 ## Performance
-Microphysics (coagulation) dominates cost (~85%): it solves coagulation
-independently in every grid cell (levels × 192 × 288), 10 forward-Euler
-sub-steps each, in float64. Two levers:
+Microphysics dominates cost (**~94%** of a 90-day run, itself ~33 h on one
+H100): it solves each cell independently (levels × 192 × 288). Two levers:
 - **`N_LEV`** sub-samples the vertical (cost is linear in cell count). 17 levels
-  ≈ 2.5× fewer cells than the full 43-level band — and matches the intended
+  ≈ 1.4× fewer cells than the full 24-level band — and matches the intended
   PARADIS vertical grid, so the level set is directly swappable later.
 - **Multi-GPU:** microphysics is `pmap`-sharded across all *visible* GPUs
   automatically (per-cell independent), so `CUDA_VISIBLE_DEVICES` selects the
@@ -172,11 +187,19 @@ sub-steps each, in float64. Two levers:
   shared machine, exporting more than one is a decision to make explicitly, not
   a default to inherit.
 
-Rough single-hour cost: full band + 1 GPU ≈ 62 s; 17 levels + 8 GPUs ≈ single
-digits. I/O and advection are minor.
+I/O and advection are minor by comparison. See `../MANIFEST.md` for measured
+timings of the current engine.
 
-## Not included (one-way, coag-only scope)
-Condensation, nucleation, SO2/OH chemistry, deposition, and aerosol→CESM
-feedback. CESM `H2SO4`/`SO2`/`OH` are available in the same `h1` files if
-condensation/chemistry are added later (`make_step(['coagulation',
-'condensation', ...])`).
+## Not included (the one-way scope)
+- **Aerosol → circulation feedback.** The winds come from CESM and are never
+  modified, so there is no self-lofting and no dynamical response. Radiative
+  heating *does* feed back on the temperature the microphysics and the next
+  radiation call see, so that loop is closed — the circulation one is not.
+- **Wet removal and dry deposition.** Gravitational settling out of the band
+  bottom is the only true aerosol sink; material crossing that face is treated
+  as removed by the (unmodelled) tropospheric wet scavenging below it.
+- **Per-species aerosol chemistry.** All aerosol mass is one dry-SO4 moment per
+  bin; no dust, sea salt or organics are carried separately.
+
+Condensation, nucleation and SO2+OH chemistry **are** included — they are the
+`MICRO=full` chain, which is what the production driver runs and requires.

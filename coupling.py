@@ -4,15 +4,23 @@ Combines:
   * ../advection/fct.py   -> flux-corrected PPM 3-D advection (via fct_core.py)
   * ../../tomas-jax       -> TOMAS sectional coagulation microphysics
 
-One-way coupling: CESM supplies the meteorology (winds U/V/OMEGA, temperature T)
-that drives BOTH the transport and the microphysics; the aerosol does not feed
-back to CESM.
+One-way coupling, meaning specifically to CESM: CESM supplies the meteorology
+(winds U/V/OMEGA, temperature T) that drives BOTH the transport and the
+microphysics, and nothing here propagates back to it. The winds in particular are
+prescribed throughout, so the circulation never responds to the aerosol.
+
+INTERNALLY, though, the loop IS closed. The aerosol sets the optics, the optics
+heat the layer, and that heating accumulates in dT_rad, which is added to T
+before the microphysics (T3d, see the micro block), before settling, and before
+the next radiation call. So aerosol -> radiation -> temperature -> microphysics
+is a genuine feedback path; only the dynamical one is absent.
 
 State tracked per grid cell = TWO moments per size bin only:
     num[bin]  number mixing ratio   [# / kg air]
     mas[bin]  total dry-mass m.r.    [kg / kg air]
-(40 bins -> 80 advected tracer fields). Coagulation redistributes number and
-mass across bins; mass is conserved, number decreases as particles merge.
+(40 bins -> 80 aerosol fields; SO2 and H2SO4 are advected too, so 82 in all).
+Coagulation redistributes number and mass across bins; mass is conserved, number
+decreases as particles merge.
 
 The tomas coagulation kernel needs a 44-wide Mk only to compute particle
 density; we place total mass in the SO4 slot (others zero) so density is a
@@ -234,9 +242,11 @@ N_COAG_SUBSTEPS = int(os.environ.get('N_COAG_SUBSTEPS', '3'))
 # are pure waste. Cap low; env-tunable.
 COAG_MAX_SUBSTEPS = int(os.environ.get('COAG_MAX_SUBSTEPS', '256'))
 CELL_CHUNK = int(os.environ.get('CELL_CHUNK', '300000'))  # cells per micro vmap batch
-# Advect this many of the 80 tracers per batch (0 = all at once). Chunking the
-# tracer axis caps advection peak memory so the full 43-level band fits on a
-# memory-tight GPU (43-level, all-80 advection needs a ~9 GB single allocation).
+# Advect this many of the 82 tracers per batch (0 = all at once). Chunking the
+# tracer axis caps advection peak memory so the band fits on a memory-tight GPU.
+# The ~9 GB single allocation that motivated this knob was measured on the older
+# 43-level band with 80 tracers; the production 24-level band needs less, but the
+# knob is the lever either way if advection OOMs.
 TRACER_CHUNK = int(os.environ.get('TRACER_CHUNK', '0'))
 LAT_FREEZE = 80.0
 # Transport-scheme fixes live in fast_advection/fct_fast.py and are read from the
@@ -464,8 +474,9 @@ RAD_MODE   = os.environ.get('RAD_MODE', 'anomaly')
 # instantaneous value is still logged and stored as arf_toa. 0 disables.
 ARF_AVG_H  = float(os.environ.get('ARF_AVG_H', '24'))
 # ---- crash resume -----------------------------------------------------------
-# Multi-hour runs on a shared GPU die (see memory gpu-contention-fastsort-oom),
-# and until now a death at step 300/360 threw away the compute even though the
+# Multi-hour runs on a shared GPU die (contention with other jobs; FAST_SORT's
+# unchunked allocation is the usual trigger -- set FAST_SORT=0 if the card is
+# loaded), and a death at step 300/360 threw away the compute even though the
 # frames/timeseries ckpt files kept the data. STATE_CKPT=1 (default) additionally
 # writes the FULL 3-D prognostic state to coupled_state_<tag>_ckpt.npz at the
 # frame cadence -- ~400 MB, overwritten in place, written atomically via a .tmp
@@ -483,7 +494,7 @@ OUT_TAG    = os.environ.get('OUT_TAG', f'{N_DAYS}day')
 #https://gmd.copernicus.org/articles/5/709/2012/
 # Default = physical MAM4 widths (accumulation, Aitken, coarse). INIT_SIGMA
 # overrides as "s1,s2,s3" for modes 1/2/3 -- set INIT_SIGMA=1.6,1.8,1.6 to match
-# the emulator's TRAINING binner (docs/DATA.md:110, modes 1&2 swapped vs physical),
+# the emulator's TRAINING binner (modes 1&2 swapped vs physical),
 # which the axial operator was trained on and needs to see in-distribution states.
 _sig = os.environ.get('INIT_SIGMA')
 if _sig:
@@ -510,11 +521,11 @@ else:
 # The "37% empty" objection above does NOT hold in this band: measured per-cell
 # empty-bin fraction is 3.2% for 'so4' vs 0.0% for 'dgnum'. Validated by the
 # 18 h A/B pair smoke_newdefaults (dgnum) vs smoke_so4bin (so4).
-# NB: this flip also reaches the EMULATOR path -- ../coupling_fast/preload_bc.py:77
-# reads C._INIT_BIN, so coupling_emu/coupling_axial now bin with 'so4' too. That
-# moves the emulator off its dgnum training-data binning; if you go back to the
-# emulator, set INIT_BIN=dgnum explicitly there (it is already OOD, see memory
-# emu-coupling-framework, so this is not the binding problem).
+# NB: this flip also reaches the EMULATOR path in the separate (unshipped)
+# emulator tree, which reads C._INIT_BIN, so those drivers now bin with 'so4'
+# too. That moves the emulator off its dgnum training-data binning; if you go
+# back to the emulator, set INIT_BIN=dgnum explicitly there (it is already out
+# of distribution, so this is not the binding problem).
 _INIT_BIN = os.environ.get('INIT_BIN', 'so4').lower()
 N_HOURS   = int(os.environ.get('N_HOURS', 24 * N_DAYS))   # override for smoke tests
 
@@ -527,7 +538,7 @@ N_HOURS   = int(os.environ.get('N_HOURS', 24 * N_DAYS))   # override for smoke t
 # nucleation mode where CARMA produced one). The flag governs the aerosol IC,
 # the per-step top/bottom open-BC fill, the polar-cap refresh and the radiation
 # anomaly reference. Gas phase (SO2/H2SO4) is ALWAYS forced by CESM regardless,
-# so 'carma' means CARMA aerosol + CESM gas forcing. See memory carma-ic-bins.
+# so 'carma' means CARMA aerosol + CESM gas forcing.
 AER_SRC = os.environ.get('AER_SRC', 'mam4').lower()
 CARMA_FILE = os.environ.get('CARMA_FILE',
     '/data/CESM_sims/cesm2.2_CARMA16node_freerun_1wk_19910601_1deg/run/'
@@ -550,8 +561,8 @@ CARMA_SUBBIN = os.environ.get('CARMA_SUBBIN', '1') != '0'
 
 # N_BINS overrides the tomas-jax default resolution (40) for this run only --
 # rebinds the local NBINS/XK names in this module; tomas_jax.core.config itself
-# (and anything else importing it fresh, e.g. coupling_fast's emulator, which is
-# shape-locked to 40 bins) is never touched.
+# (and anything else importing it fresh, e.g. the separate emulator tree, which
+# is shape-locked to 40 bins) is never touched.
 N_BINS = int(os.environ.get('N_BINS', '0'))   # 0 = use tomas-jax default (NBINS=40)
 if N_BINS > 0 and N_BINS != NBINS:
     # Keep the SAME physical size range as the default grid (XK0 .. XK0*2^40),
@@ -2100,9 +2111,9 @@ def main():
         # budget checkpoint: burden at the start of this hour (== end of prev)
         M_start_np = Mbur(mas, 'np'); M_start_pol = Mbur(mas, 'pol')
 
-        # ---- 1. transport (advect all 80 tracers with shared winds) ----
-        # (plus the 2 gas tracers stacked on the end; winds are shared so the
-        # whole 82-row stack advects in one batch)
+        # ---- 1. transport (advect all 82 tracers with shared winds) ----
+        # (80 aerosol rows plus the 2 gas tracers stacked on the end; winds are
+        # shared, so the whole 82-row stack advects in one batch)
         ta = time.time()
         # add all tracers and advect them together
         qb = jnp.concatenate([num, mas, so2[None], h2so4[None]], axis=0)

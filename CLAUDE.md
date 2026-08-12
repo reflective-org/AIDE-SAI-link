@@ -4,8 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-One-way coupled CESM → TOMAS-JAX sectional aerosol model for stratospheric
-aerosol injection, in JAX on GPU. `README.md` is the orientation;
+CESM-forced TOMAS-JAX sectional aerosol model for stratospheric aerosol
+injection, in JAX on GPU. The meteorology is prescribed — one-way *to CESM*, so
+the winds are read and the circulation never responds — but aerosol, radiation
+and microphysics are interactively coupled: radiative heating from the model's
+own aerosol accumulates into the temperature the microphysics, the settling and
+the next radiation call all see.
+
+**Direction of travel.** The end goal is a model-agnostic dycore–aerosol–radiation
+coupler: other meteorology sources (including emulated dycores, which would close
+the circulation loop too) and other aerosol schemes (CARMA, MAM, GLOMAP). CESM and
+TOMAS are what is wired in first, not the target. At any seam — the CESM reader,
+the wind interface, `AER_SRC`, the engine swap in `driver_fast.py`, the radiation
+driver — prefer keeping the seam generic over specialising it, and say so if a
+change would make a slot harder to swap. `README.md` is the orientation;
 **`MANIFEST.md` is the canonical reference for this tree** — it records every
 default and, more importantly, *why* each one is what it is. Where `docs/`
 disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.

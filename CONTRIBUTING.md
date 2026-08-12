@@ -45,14 +45,44 @@ git commit -m "Add brief description of change"
 
 ## Running Tests
 
--> Instructions on how to run your unit tests.
+**This model does not fail loudly.** A broken run still completes, stays finite,
+and draws a plausible-looking figure — four transport bugs once cost a mass leak
+that went unnoticed for months, with no crash and no warning. Run these before
+you push:
+
+```bash
+python3 validation/test_conservation.py     # transport does not leak mass
+python3 validation/test_physics_math.py     # settling math unchanged
+```
+
+Seconds each, no GPU and no CESM data needed, and non-zero exit on failure. CI
+runs both on every push, so this is for getting the answer first. Run them
+whenever you touch transport (`fast_advection/`) or `settling.py`.
+
+The rest of `validation/` are investigations rather than pass/fail tests: they
+load a real run and print diagnostics for a human to read, and need the CESM
+archive and usually a checkpoint. See
+[docs/VALIDATION.md](./docs/VALIDATION.md) for what each one asks, how to run
+it, and the precision rule to follow if you change advection.
 
 ### Writing Tests
 
-- Tests should live in `tests/` and use [pytest](https://docs.pytest.org/).
-- Shared fixtures and mocks should live in `tests/conftest.py`.
-- Mock any cloud or network calls; tests must run offline.
-- Aim for one test file per source module (e.g. `test_storage.py` for `storage.py`).
+There is no pytest in this repo, and no `tests/` directory. Automated tests live
+in `validation/` as standalone scripts following the pattern in
+`test_conservation.py`:
+
+- a module-level `check(name, ok, detail)` that prints `PASS`/`FAIL` and appends
+  failures to a `FAILED` list;
+- one function per group of related assertions;
+- a `__main__` block that runs them and ends with `sys.exit(1 if FAILED else 0)`.
+
+The exit code is what makes a script usable in CI, so it is not optional.
+
+To be runnable in CI a test must be **self-contained**: inputs built from a
+fixed seed (`np.random.default_rng(0)`), no GPU, no CESM archive, and no
+`tomas-jax` / `jax-rrtmgp` import. Anything needing those is an investigation
+rather than a test — write it as one, and say so in its docstring. If you add a
+self-contained harness, add a step for it to `.github/workflows/ci.yml`.
 
 ## Reporting Issues
 

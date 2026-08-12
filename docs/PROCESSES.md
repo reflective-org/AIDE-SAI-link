@@ -142,6 +142,21 @@ global area).
 
 ## 1.6 Initial and boundary conditions
 
+> [!IMPORTANT]
+> **This section records one specific CARMA-IC experiment, not the production
+> configuration.** It is kept because the reasoning below (why `BC_BOT_AER`
+> matters, what the bottom face does) still applies. What has changed since:
+>
+> | | this section | production today |
+> |---|---|---|
+> | IC/BC source | static CARMA frame (`AER_SRC=carma`) | per-step MAM4 (`AER_SRC=mam4`) |
+> | band | 1–100 hPa, BCs at 13.3 / 87.8 hPa | 1–150 hPa, BCs at 1.2 / 143 hPa |
+> | bottom aerosol inflow | `BC_BOT_AER=0` (aerosol-free) | `BC_BOT_AER=1.0` (full reservoir) |
+> | gases | Dirichlet-clamped (`BC_GAS=clamp`) | open faces (`BC_GAS=flux`, default since 2026-07-30) |
+>
+> The current settings are echoed in every run header; `docs/CONFIGURATION.md`
+> lists the defaults and `MANIFEST.md` explains why each is what it is.
+
 **IC:** CARMA, `cesm2.2_CARMA16node_freerun_1wk_19910601_1deg`, frame 0.
 PRSUL + MXAER projected onto 40 TOMAS bins as dry sulfate-equivalent radius at
 rho = 1923 kg/m3, via **sub-bin remap**. Direct binning produced a day-0 "comb"
@@ -166,8 +181,10 @@ Initial burdens: N = 9.643e15, M = 7.667e-4 (**0.669 Tg**).
 | polar rows (\|lat\|>80, 22 rows) | stirred, mass-conserving (`ADV_POLAR=zonal`) — **not clamped** |
 | mass fixer | none — open system by construction |
 
-`BC_BOT_AER` and `BC_EDGE` came from the run environment, NOT the code defaults
-(1.0 and clamp respectively). Record the env, not the defaults.
+`BC_BOT_AER` and `BC_EDGE` came from that run's environment, NOT the code
+defaults. (At the time those defaults were 1.0 and `clamp`; `BC_EDGE` now
+resolves to `open` whenever `ADV_WCONT=1`, which is itself the default.) Record
+the env, not the defaults.
 
 **Why `BC_BOT_AER=0`** — two reasons pointing the same way:
 1. *Physical.* Air crossing 88 hPa in the tropics is Brewer-Dobson ascent of
@@ -265,7 +282,7 @@ Three MNFIX calls and two water re-equilibrations per 360 s step.
 ### On `FAST_DT = 360`
 
 **Not a TOMAS default.** TOMAS-JAX's full model runs at **60 s**
-(`docs/architecture.md:394`; coagulation there uses fixed 3-10 substeps per 60 s
+(tomas-jax `docs/architecture.md:394`; coagulation there uses fixed 3-10 substeps per 60 s
 step). 360 s is the GPU-fast reduced model's own design point — a 6x coarsening
 adopted for performance (`fast/run.py:5`: "6 XLA program invocations with no host
 round-trips"). It propagates as a default through `make_fast_step`, `run_fast`
@@ -273,7 +290,7 @@ and `driver_fast.py:50`.
 
 It is empirically supported, but note the direction of the argument: the accuracy
 machinery was built to make 360 s viable, not the reverse. Calibration measured
-AT 360 s (`docs/gpu_fast.md`):
+AT 360 s (tomas-jax `docs/gpu_fast.md`):
 
 | state | fixed 3x120 s | adaptive dt*lambda/0.05 |
 |---|---|---|
