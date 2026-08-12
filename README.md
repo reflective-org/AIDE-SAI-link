@@ -1,7 +1,17 @@
 # aide_sai_core
 
+[![CI](https://github.com/reflective-org/aide_sai_core/actions/workflows/ci.yml/badge.svg)](https://github.com/reflective-org/aide_sai_core/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](./LICENSE)
+
 One-way coupled **CESM → TOMAS-JAX** sectional aerosol model for stratospheric
 aerosol injection (SAI), in JAX on GPU.
+
+> [!NOTE]
+> CI covers what a GPU-less runner without the CESM archive can cover: that the
+> tree imports, and that advection still conserves mass. The physics validation
+> in `validation/` runs on a GPU box, not here — see
+> [Running Tests](#running-tests).
 
 > [!WARNING]
 > This project is under active development, there is no guarantee that it will

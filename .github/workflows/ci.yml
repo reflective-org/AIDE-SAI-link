@@ -1,0 +1,76 @@
+# CI for aide_sai_core.
+#
+# WHAT THIS CAN AND CANNOT COVER. GitHub's runners have no GPU and not the ~23 TB
+# CESM archive, so the physics validation does not run here -- of the five
+# harnesses in validation/, only test_conservation.py is self-contained (it
+# builds its fields from np.random.default_rng(seed)). The other four need the
+# CESM archive, a run checkpoint, or both, and are left to be run on the box.
+#
+# That makes this a thin slice, deliberately: it checks that the tree still
+# imports and that transport still conserves mass. Worth having anyway --
+# commit 99806f3 ("validation: fix the import prologues -- 4 of 5 harnesses
+# could not start") shipped a tree where nothing in validation/ could even
+# start, and a job that merely imports each module would have caught it.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    name: tests (advection conservation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      # NOT requirements.txt: that pulls cartopy, netCDF4 and matplotlib, none of
+      # which this test touches, and cartopy alone dominates the install. The
+      # test needs jax, jaxlib and numpy. The CPU jax wheel is the right one here
+      # -- there is no GPU on the runner.
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install "jax>=0.6.2" "jaxlib>=0.6.2" "numpy>=2.0"
+
+      # settling.py imports cleanly on its own (jax + numpy only). coupling.py,
+      # radiation.py and plot_run.py cannot be imported here: the first two need
+      # the tomas-jax / jax-rrtmgp sibling repos and plot_run needs cartopy.
+      - name: import check
+        run: python -c "import settling; print('settling imports OK')"
+
+      # Exits 1 on any failure (see its FAILED list), so the job status is real.
+      # ~12 s on CPU.
+      - name: advection conservation
+        run: python validation/test_conservation.py
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: install ruff
+        run: pip install ruff
+
+      # ERRORS ONLY, on purpose: syntax errors (E9) and undefined or misused
+      # names (F63, F7, F82). Style rules are NOT enabled, and import sorting
+      # (I001) must stay off -- several modules here deliberately run
+      # sys.path.insert() before importing what that insert makes importable, so
+      # "organize imports" would hoist those imports above the path setup and
+      # break the tree. 33 of the 77 findings from a default ruff run are that
+      # rule, and every one of them is a false positive for this layout.
+      - name: ruff
+        run: ruff check --select=E9,F63,F7,F82 .
