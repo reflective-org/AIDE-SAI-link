@@ -34,7 +34,16 @@ PREFIX = 'f.e21.FWHIST.f09_f09_mg17.atmos-scale_fixedSST_1996-2014.001.cam'
 H1 = f'{HDIR}/hour_1/{PREFIX}.h1'
 SUF = '.1996010100-2014123100.nc'
 
-st = np.load(_os.environ.get('STATE', _os.path.join(_REPO, 'coupled_state_prod90d_ckpt.npz')))
+# Checkpoint from the CURRENT DIRECTORY, like every other script here. This used
+# to default to a path inside the repo, which stopped resolving once run outputs
+# moved to a runs directory outside the tree (see README) -- run this from there.
+STATE = _os.environ.get('STATE', 'coupled_state_prod90d_ckpt.npz')
+if not _os.path.exists(STATE):
+    raise SystemExit(
+        f"validate_vpos_f32: no checkpoint at {STATE!r}.\n"
+        f"  Run this from the directory holding your run output, or set\n"
+        f"  STATE=/path/to/coupled_state_<TAG>_ckpt.npz")
+st = np.load(STATE)
 num = np.asarray(st['num'])
 NBINS, nlev, nlat, nlon = num.shape
 h0 = int(st['s_done']) * int(st['step_hours'])

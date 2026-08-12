@@ -27,8 +27,16 @@ sys.path.insert(0, _os.path.join(_REPO, 'fast_advection'))
 import jax, jax.numpy as jnp
 import xarray as xr
 
+# Checkpoint from the CURRENT DIRECTORY, like every other script here. This used
+# to default to a path inside the repo, which stopped resolving once run outputs
+# moved to a runs directory outside the tree (see README) -- run this from there.
 STATE = sys.argv[1] if len(sys.argv) > 1 else \
-    _os.environ.get('STATE', _os.path.join(_REPO, 'coupled_state_prod90d_ckpt.npz'))
+    _os.environ.get('STATE', 'coupled_state_prod90d_ckpt.npz')
+if not _os.path.exists(STATE):
+    raise SystemExit(
+        f"floor_anatomy: no checkpoint at {STATE!r}.\n"
+        f"  Run this from the directory holding your run output, pass one as\n"
+        f"  argv[1], or set STATE=/path/to/coupled_state_<TAG>_ckpt.npz")
 HOUR = int(sys.argv[2]) if len(sys.argv) > 2 else None
 
 # ---- grid, exactly as coupling.py builds it -------------------------------

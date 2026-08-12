@@ -110,9 +110,34 @@ set -euo pipefail
 # Run THE TREE THIS SCRIPT LIVES IN, derived from the script's own location rather
 # than hardcoded. A launcher that cd's to a fixed path runs whatever code is at that
 # path, not the code you just edited -- and no amount of output checking detects it,
-# because both sides of any comparison execute the same files. It also means outputs
-# land in this repo, so a run here cannot overwrite another checkout's results.
-cd "$(dirname "$(readlink -f "$0")")"
+# because both sides of any comparison execute the same files.
+#
+# Resolve that tree, but do NOT cd into it. Until 2026-08-12 this line was a `cd`,
+# which put every output beside the source; the repo accumulated 29 GB of .npz that
+# .gitignore hid rather than prevented. Outputs go to the CURRENT DIRECTORY instead
+# -- every output path in coupling.py and plot_run.py is cwd-relative -- so launch
+# from a runs directory outside the repo:
+#   cd ~/noah/coupling_runs && INJ_SO2_TG_YR=10 OUT_TAG=prod90d ~/noah/coupling_prod/run_prod.sh
+# Nothing on the import path needs the cwd: coupling.py resolves tomas-jax and
+# jax-rrtmgp from its own __file__ (_dep_path/_HERE), radiation.py resolves
+# rad_data/ the same way, and python3 puts the script's own directory on sys.path.
+#
+# TRADEOFF, stated plainly: the old `cd` also meant two checkouts could not collide,
+# because each wrote into itself. Now they collide if both are launched from the same
+# runs directory with the same OUT_TAG. OUT_TAG discipline (see above) is what keeps
+# runs apart -- it already had to, since one checkout can overwrite its own results.
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# Refuse to write into the repo. This is the whole point of the change above, and
+# it fails INVISIBLY otherwise: .npz/.png are gitignored, so a run launched from the
+# wrong directory looks completely normal and just quietly re-pollutes the tree.
+if [[ "$(readlink -f "$PWD")" == "$HERE" ]]; then
+    echo "run_prod.sh: refusing to run with the repo itself as the working directory." >&2
+    echo "             Outputs are written to \$PWD, and they do not belong in the" >&2
+    echo "             source tree. Launch from a runs directory instead:" >&2
+    echo "                 cd ~/noah/coupling_runs && $(readlink -f "$0")" >&2
+    exit 2
+fi
 
 # N_HOURS and OUT_TAG are overridable so this same launcher can EXTEND the run
 # instead of being copied into a near-duplicate script that then drifts. They were
@@ -214,4 +239,4 @@ ADV_VPOS=1 \
 DEBUG=1 PROFILE=1 \
 OUT_TAG=${OUT_TAG:-prod90d} \
 RESUME=${RESUME:-0} \
-    exec python3 driver_fast.py
+    exec python3 "$HERE/driver_fast.py"

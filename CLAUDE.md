@@ -50,6 +50,24 @@ disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
 
 ## Run outputs
 
-A single 90-day run writes GBs of `.npz`. They are gitignored by broad patterns
-(`*.npz`, `*.png`, `*.gif`) because outputs land in whatever directory you launch
-from — never commit them, and never widen the tracked set to include them.
+**Outputs live outside the repo, in a runs directory** (`~/noah/coupling_runs`
+on this box). Every output path in `coupling.py` and `plot_run.py` is relative
+to the working directory, so the working directory is the run:
+
+```bash
+cd ~/noah/coupling_runs && OUT_TAG=prod90d ~/noah/coupling_prod/run_prod.sh
+python3 ~/noah/coupling_prod/plot_run.py prod90d
+```
+
+`run_prod.sh` **refuses** to start with the repo as `$PWD`. That guard exists
+because the mistake is otherwise invisible: `.npz`/`.png` are gitignored, so a
+run launched from the wrong place looks entirely normal while filling the tree
+(this is how 29 GB accumulated before 2026-08-12). The scripts resolve their own
+tree from `__file__`, so invoking them by absolute path from anywhere is correct
+and is the intended usage — do not `cd` into the repo to run them.
+
+A single 90-day run writes GBs of `.npz`, gitignored by broad patterns (`*.npz`,
+`*.png`, `*.gif`) — never commit them, and never widen the tracked set to
+include them. Nothing untracked belongs in the repo folder: the checkpoint-reading
+validation harnesses take their `STATE` from `$PWD` too, so run those from the
+runs directory as well.
