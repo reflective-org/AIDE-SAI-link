@@ -46,11 +46,11 @@ and they are found automatically; otherwise set `TOMAS_JAX_PATH` / `RRTMGP_PATH`
 | [`reflective-org/tomas-jax`](https://github.com/reflective-org/tomas-jax) | sectional aerosol microphysics |
 | [`climate-analytics-lab/jax-rrtmgp`](https://github.com/climate-analytics-lab/jax-rrtmgp) | radiative transfer (`RAD=0` skips it) |
 
-**The CESM forcing is not included and cannot be.** The model reads 21 hourly
-`h1` variables — 14 for the coupling itself (`U V OMEGA T num_a{1,2,3}
-so4_a{1,2,3} SO2 H2SO4 OH RELHUM`) and, unless `RAD=0`, 7 more for radiation
-(`Q O3 CH4 FLDS FLNS FSDS FSNS`). As archived they total ~23 TB. Point
-`CESM_DIR` at an archive laid out as
+**The CESM archive is ~23 TB, so it can't be bundled in a git repo.** The model
+reads 21 hourly `h1` variables — 14 for the coupling itself (`U V OMEGA T
+num_a{1,2,3} so4_a{1,2,3} SO2 H2SO4 OH RELHUM`) and, unless `RAD=0`, 7 more for
+radiation (`Q O3 CH4 FLDS FLNS FSDS FSNS`). Point `CESM_DIR` at an archive laid
+out as
 `$CESM_DIR/hour_1/$CESM_PREFIX.h1.<VAR>$CESM_SUF`. Reads are one hour × band
 levels at a time (~5.3 MB per variable-hour), so a subset is enough: ~3.6 GB for
 a 2-day test, ~160 GB for a 90-day run. Full variable list and units:
