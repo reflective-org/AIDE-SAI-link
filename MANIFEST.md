@@ -64,19 +64,33 @@ refuses to start with the repo as `$PWD`. Keep a runs directory outside the tree
 
 ```bash
 git clone https://github.com/reflective-org/aide_sai_core.git
-git clone https://github.com/reflective-org/tomas-jax                 # beside it -- found automatically
+git clone -b gpu-fast https://github.com/reflective-org/tomas-jax     # beside it -- found automatically
 git clone https://github.com/climate-analytics-lab/jax-rrtmgp         # ditto
+git -C jax-rrtmgp apply ../aide_sai_core/patches/jax-rrtmgp-zenith.patch  # required for RAD=1
 pip install -r aide_sai_core/requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusable for production
 mkdir -p runs && cd runs                                     # outputs go OUTSIDE the repo
 N_HOURS=6 OUT_TAG=smoke ../aide_sai_core/run_prod.sh         # smoke test first
 ```
 
+**Neither sibling repo is usable as a plain clone of its default branch**, and
+both failures are at import or in the first radiation call, not subtle:
+
+| repo | required state | why | symptom if skipped |
+|---|---|---|---|
+| `tomas-jax` | branch `gpu-fast` | `tomas_jax.fast`, the batched reduced engine `driver_fast.py` monkeypatches in, exists only there — `main` has the per-cell chain only | `ModuleNotFoundError: tomas_jax.fast` at `driver_fast.py:111` |
+| `jax-rrtmgp` | `main` + `patches/jax-rrtmgp-zenith.patch` | `radiation.py` passes zenith per column, `(nlat, nlon, 1)`; upstream `sw_cell_source` assumes a scalar and broadcasts it against the `(nlat, nlon)` TOA flux | shape blow-up in the SW solve on the first `RAD=1` step |
+
+The patch is one hunk against jax-rrtmgp v0.2.1 (`d7abe2e`) and is the only
+carried modification to either dependency; keep it that way, and if upstream
+takes the fix, delete the patch rather than let the two drift. `git apply`
+refuses a partial application, so a failure means pin `d7abe2e` and retry.
+
 | dependency | not shipped because | how it is found |
 |---|---|---|
 | `tomas-jax` | separate repo (microphysics) | `$TOMAS_JAX_PATH`, else `../tomas-jax`, else the normal import path |
 | `jax-rrtmgp` | separate repo (radiation) | `$RRTMGP_PATH`, same order. `RAD=0` skips radiation and this dependency |
-| CESM `h1` hourly meteorology + MAM4 | ~23 TB as archived | `$CESM_DIR` (+ `CESM_PREFIX`, `CESM_SUF`). Layout: `$CESM_DIR/hour_1/$CESM_PREFIX.h1.<VAR>$CESM_SUF`. Variables: `docs/COUPLING_VARIABLES.md`. Reads are one hour × band levels at a time (~5.3 MB per variable-hour), so a subset suffices: ~3.6 GB for 2 days, ~160 GB for 90 days |
+| CESM `h1` hourly meteorology + MAM4 | ~23 TB as archived | **On the shared H100 box, nothing to set** — the `coupling.py` defaults resolve to the FWHIST archive under `/data`, world-readable. Elsewhere: `$CESM_DIR` (+ `CESM_PREFIX`, `CESM_SUF`). Layout: `$CESM_DIR/hour_1/$CESM_PREFIX.h1.<VAR>$CESM_SUF`. Variables: `docs/COUPLING_VARIABLES.md`. Reads are one hour × band levels at a time (~5.3 MB per variable-hour), so a subset suffices: ~3.6 GB for 2 days, ~160 GB for 90 days |
 | CUDA driver library | site-specific | `run_prod.sh` puts `$CUDA_DRIVER_LIB` on `LD_LIBRARY_PATH`. Where libcuda.so.1 is not on the loader path JAX **silently falls back to CPU**; set the variable, or empty it for a normal CUDA install |
 
 An env var that is set but points nowhere is an error, not a silent fallback; a

@@ -66,20 +66,63 @@ forcing source as work, not configuration.
 
 ## Installation
 
-```bash
-git clone https://github.com/reflective-org/aide_sai_core.git
-cd aide_sai_core
-pip install -r requirements.txt
-pip install --upgrade "jax[cuda12]>=0.6.2"   # GPU wheel -- the CPU one cannot do production
-```
-
 Two dependencies are separate repos, not on PyPI. Clone them **beside** this one
 and they are found automatically; otherwise set `TOMAS_JAX_PATH` / `RRTMGP_PATH`:
 
-| repo | role |
-|---|---|
-| [`reflective-org/tomas-jax`](https://github.com/reflective-org/tomas-jax) | sectional aerosol microphysics |
-| [`climate-analytics-lab/jax-rrtmgp`](https://github.com/climate-analytics-lab/jax-rrtmgp) | radiative transfer (`RAD=0` skips it) |
+| repo | role | required state |
+|---|---|---|
+| [`reflective-org/tomas-jax`](https://github.com/reflective-org/tomas-jax) | sectional aerosol microphysics | branch **`gpu-fast`** — `main` has no `tomas_jax.fast` |
+| [`climate-analytics-lab/jax-rrtmgp`](https://github.com/climate-analytics-lab/jax-rrtmgp) | radiative transfer (`RAD=0` skips it) | `main`, **plus `patches/jax-rrtmgp-zenith.patch`** from this repo |
+
+Neither is a plain clone of its default branch:
+
+* **tomas-jax must be on `gpu-fast`.** `driver_fast.py` — the production entry
+  point — imports `tomas_jax.fast`, the batched reduced engine, which only
+  exists on that branch. On `main` the import fails outright.
+* **jax-rrtmgp needs the zenith patch.** `radiation.py` passes a per-column
+  solar zenith field, shape `(nlat, nlon, 1)`; upstream `sw_cell_source`
+  assumes a scalar and mis-broadcasts it against the `(nlat, nlon)` TOA flux.
+  The one-hunk fix is checked in here as
+  [`patches/jax-rrtmgp-zenith.patch`](./patches/jax-rrtmgp-zenith.patch) and is
+  needed for any `RAD=1` run.
+
+```bash
+git clone https://github.com/reflective-org/aide_sai_core.git
+
+# microphysics -- the gpu-fast branch, not main
+git clone -b gpu-fast https://github.com/reflective-org/tomas-jax
+
+# radiation -- clone, then apply the zenith patch shipped with this repo
+git clone https://github.com/climate-analytics-lab/jax-rrtmgp
+git -C jax-rrtmgp apply ../aide_sai_core/patches/jax-rrtmgp-zenith.patch
+
+pip install -r aide_sai_core/requirements.txt
+pip install --upgrade "jax[cuda12]>=0.6.2"   # GPU wheel -- the CPU one cannot do production
+```
+
+The patch was made against jax-rrtmgp v0.2.1 (`d7abe2e`); `git apply` fails
+loudly rather than half-applying if upstream has moved, in which case pin that
+tag. Do **not** activate the tomas-jax `.venv` — it is CPU-only jaxlib with no
+xarray. The working combination is system `python3` with the GPU jax wheel.
+
+Verify the install before touching CESM data — this resolves both sibling repos
+exactly the way the model does, so it fails the same way a run would:
+
+```bash
+REPO=~/aide_sai_core
+grep -q mu_2d $(dirname $REPO)/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py \
+  && echo "zenith patch applied"
+python3 -c "
+import sys; sys.path.insert(0, '$REPO')
+import radiation                      # puts both repos on sys.path; imports rrtmgp + tomas-jax Mie
+from tomas_jax.fast import run_fast   # exists only on tomas-jax gpu-fast
+import jax; print('deps ok:', jax.devices())
+"
+```
+
+`jax.devices()` printing `[CpuDevice(id=0)]` here is expected outside
+`run_prod.sh`, which is what puts `libcuda.so.1` on `LD_LIBRARY_PATH` (see
+`CUDA_DRIVER_LIB` below); inside a run it must show a GPU.
 
 **The CESM archive is ~23 TB, so it can't be bundled in a git repo.** The model
 reads 21 hourly `h1` variables — 14 for the coupling itself (`U V OMEGA T
@@ -90,6 +133,14 @@ out as
 levels at a time (~5.3 MB per variable-hour), so a subset is enough: ~3.6 GB for
 a 2-day test, ~160 GB for a 90-day run. Full variable list and units:
 [docs/COUPLING_VARIABLES.md](./docs/COUPLING_VARIABLES.md).
+
+**On the shared H100 box these runs were made on, set none of this.** The three
+defaults in `coupling.py` already resolve to the FWHIST archive under `/data`,
+which is readable by every account on the machine, so the install above is the
+whole setup and `run_prod.sh` works as written. `CESM_DIR`/`CESM_PREFIX`/
+`CESM_SUF` matter only off that box. The one place any CESM path is built is
+`coupling.py` (`H1`); `radiation.py` is handed the opener rather than
+constructing paths of its own, so there is nothing else to repoint.
 
 CESM's own *internally calculated* aerosol radiative forcing is neither read nor
 needed: this model computes forcing from its own aerosol, through RRTMGP and its

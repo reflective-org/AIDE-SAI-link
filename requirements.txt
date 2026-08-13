@@ -19,6 +19,13 @@
 # automatically; otherwise point those two variables at them. Run with RAD=0 to
 # skip radiation, and jax-rrtmgp with it.
 #
+# NEITHER IS A PLAIN CLONE OF ITS DEFAULT BRANCH:
+#     git clone -b gpu-fast https://github.com/reflective-org/tomas-jax
+#         `main` has no tomas_jax.fast, the engine driver_fast.py runs on.
+#     git -C ../jax-rrtmgp apply <this repo>/patches/jax-rrtmgp-zenith.patch
+#         per-column solar zenith; without it RAD=1 dies in the shortwave solve.
+# See the README Installation section for the whole sequence.
+#
 # The CESM h1 hourly meteorology is also not shipped (~TB). See CESM_DIR in
 # coupling.py and docs/COUPLING_VARIABLES.md for the variables required.
 
@@ -27,10 +34,17 @@ jaxlib>=0.6.2
 numpy>=2.0
 xarray>=2025.0
 netCDF4>=1.7
-# scipy is not imported by this repo -- it is here for tomas-jax, which uses it
-# (physics/radiative_forcing.py) and is cloned beside rather than pip-installed,
-# so its own dependencies are never resolved for you.
+# The next three are not imported by this repo. They are here because the two
+# sibling repos are CLONED beside it rather than pip-installed, so their own
+# dependencies are never resolved for you -- and each of these is needed at
+# import time, not lazily:
+#     scipy             tomas-jax physics/radiative_forcing.py
+#     diffrax           tomas_jax/__init__.py -> solvers/diffrax.py; without it
+#                       *any* `import tomas_jax` fails, RAD=0 included
+#     dataclasses-json  rrtmgp/config/radiative_transfer.py (RAD=1 only)
 scipy>=1.15
+diffrax>=0.6
+dataclasses-json>=0.6
 
 # --- analysis/plotting only (plot_run.py, gif_run.py) ---------------------
 # Not needed to run the model. cartopy pulls in GEOS/PROJ system libraries; skip

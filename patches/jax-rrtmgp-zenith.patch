@@ -1,0 +1,33 @@
+Broadcast fix for a per-column solar zenith angle in jax-rrtmgp.
+
+radiation.py passes `zenith` as a per-column (nlat, nlon, 1) field, one solar
+angle per grid column. Upstream `sw_cell_source` assumes a scalar and does
+`toa_flux * mu` with `toa_flux` of shape (nx, ny), which against a (nx, ny, 1)
+`mu` broadcasts to (nx, ny, ny) instead of erroring cleanly -- the SW solve then
+fails downstream on a shape mismatch (or, on a square grid, silently computes
+nonsense). This drops the trailing singleton axis first and leaves the scalar
+case untouched.
+
+Applies to climate-analytics-lab/jax-rrtmgp at v0.2.1 (d7abe2e). Only needed
+when RAD=1; RAD=0 never enters the shortwave solver.
+
+Apply with:  git -C /path/to/jax-rrtmgp apply /path/to/this/patch
+
+diff --git a/rrtmgp/rte/monochromatic_two_stream.py b/rrtmgp/rte/monochromatic_two_stream.py
+index e6b0d54..e054c9f 100644
+--- a/rrtmgp/rte/monochromatic_two_stream.py
++++ b/rrtmgp/rte/monochromatic_two_stream.py
+@@ -383,8 +383,11 @@ def sw_cell_source(
+   t_noscat = jnp.exp(-optical_depth / jnp.cos(zenith))
+   mu = jnp.cos(zenith)
+ 
+-  # The vertical component of incident flux at the top boundary.
+-  flux_down_direct_bc = toa_flux * mu
++  # The vertical component of incident flux at the top boundary. `zenith` may
++  # be a scalar or a per-column (nx, ny, 1) field; `toa_flux` is (nx, ny), so
++  # drop the trailing singleton axis before applying the cosine factor.
++  mu_2d = mu[..., 0] if getattr(mu, 'ndim', 0) == 3 else mu
++  flux_down_direct_bc = toa_flux * mu_2d
+ 
+   # Global recurrent accumulation for the direct-beam downward flux at the
+   # bottom cell face unraveling from the top of the atmosphere down to the

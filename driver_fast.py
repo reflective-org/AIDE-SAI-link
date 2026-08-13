@@ -108,8 +108,18 @@ import jax.numpy as jnp
 
 import coupling as C
 from fct_fast import advect_hour_batch as _fast_advect
-from tomas_jax.fast import FastState, run_fast
-from tomas_jax.fast.config import NBINS as FAST_NBINS, SRTSO4, GH2SO4, GSO2
+try:
+    from tomas_jax.fast import FastState, run_fast
+    from tomas_jax.fast.config import NBINS as FAST_NBINS, SRTSO4, GH2SO4, GSO2
+except ImportError as _e:
+    # coupling.py imported fine (it uses the per-cell chain, which is on every
+    # branch), so tomas-jax is present but on the wrong one.
+    raise SystemExit(
+        f"driver_fast.py: cannot import tomas_jax.fast ({_e}).\n"
+        "  The batched engine exists only on the tomas-jax `gpu-fast` branch;\n"
+        "  `main` has the per-cell chain only. In your tomas-jax clone:\n"
+        "      git checkout gpu-fast\n"
+        "  See the README Installation section.")
 
 # native grid must be the fast model's 40-bin grid
 if C.NBINS != FAST_NBINS:
