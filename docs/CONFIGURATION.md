@@ -11,8 +11,8 @@ Each variable is read **once at module import** and echoed in the run header, so
 any log is self-describing. Set them by prefixing the launcher:
 
 ```bash
-REPO=~/aide_sai_core                       # wherever this clone lives
-cd ~/sai_runs                              # launch from a runs dir, NOT the repo
+REPO=$PWD/aide_sai_core                    # wherever this clone lives -- must be ABSOLUTE, the next line cd's away
+cd "$PWD/sai_runs"                         # launch from a runs dir, NOT the repo
 OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/run_prod.sh
 ```
 

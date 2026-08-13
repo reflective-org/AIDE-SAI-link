@@ -105,24 +105,40 @@ loudly rather than half-applying if upstream has moved, in which case pin that
 tag. Do **not** activate the tomas-jax `.venv` — it is CPU-only jaxlib with no
 xarray. The working combination is system `python3` with the GPU jax wheel.
 
-Verify the install before touching CESM data — this resolves both sibling repos
-exactly the way the model does, so it fails the same way a run would:
+Verify the install before touching CESM data. This is four checks, one per way
+the install goes wrong — the patch, the sibling layout, the tomas-jax branch,
+the jax wheel — and it resolves both repos exactly the way the model does, so it
+fails the same way a run would. Paste the whole block at once; the `python3 -c`
+line needs the script that follows it:
 
 ```bash
-REPO=~/aide_sai_core
+# wherever you cloned it -- $PWD if you are standing where the block above ran.
+# The siblings are located relative to this, so it does not have to be $HOME.
+REPO=$PWD/aide_sai_core
+export LD_LIBRARY_PATH=/run/nvidia/driver/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+
+# 1. zenith patch applied? mu_2d exists only after it
 grep -q mu_2d $(dirname $REPO)/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py \
   && echo "zenith patch applied"
+
 python3 -c "
 import sys; sys.path.insert(0, '$REPO')
-import radiation                      # puts both repos on sys.path; imports rrtmgp + tomas-jax Mie
-from tomas_jax.fast import run_fast   # exists only on tomas-jax gpu-fast
-import jax; print('deps ok:', jax.devices())
+import radiation                      # 2. sibling layout: puts both repos on sys.path, imports rrtmgp + tomas-jax Mie
+from tomas_jax.fast import run_fast   # 3. right branch: exists only on tomas-jax gpu-fast
+import jax; print('deps ok:', jax.devices())   # 4. GPU wheel loads
 "
 ```
 
-`jax.devices()` printing `[CpuDevice(id=0)]` here is expected outside
-`run_prod.sh`, which is what puts `libcuda.so.1` on `LD_LIBRARY_PATH` (see
-`CUDA_DRIVER_LIB` below); inside a run it must show a GPU.
+A pass is two lines, `zenith patch applied` and `deps ok: [CudaDevice(id=0)]`,
+with nothing in between — checks 2 and 3 are silent unless they raise
+`ImportError`.
+
+The `export` is only needed to make check 4 pass in a bare shell: this box keeps
+`libcuda.so.1` outside the default search path, and `run_prod.sh` prepends the
+same directory itself (see `CUDA_DRIVER_LIB` below). Adjust the path, or drop
+the line, on a normal CUDA install. Without it jax prints a `cuInit` error and
+reports `[CpuDevice(id=0)]` — harmless here, and *not* a failed check, but
+inside a run CPU means months instead of hours.
 
 **The CESM archive is ~23 TB, so it can't be bundled in a git repo.** The model
 reads 21 hourly `h1` variables — 14 for the coupling itself (`U V OMEGA T
@@ -155,8 +171,9 @@ the working directory, so that directory is where the run lands — and a single
 itself as the working directory rather than let that happen silently.
 
 ```bash
-REPO=~/aide_sai_core               # wherever this clone lives
-mkdir -p ~/sai_runs && cd ~/sai_runs   # anywhere BUT the repo
+REPO=$PWD/aide_sai_core            # wherever this clone lives -- must be ABSOLUTE, the next line cd's away
+RUNS=$PWD/sai_runs                 # anywhere BUT the repo
+mkdir -p "$RUNS" && cd "$RUNS"
 
 # 1-step smoke test: N_HOURS=6 is one 6 h coupling step, ~6 min on an H100.
 N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/run_prod.sh
