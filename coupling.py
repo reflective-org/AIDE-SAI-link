@@ -2003,6 +2003,17 @@ def main():
     ts = {k: [] for k in ('hours', 'Nburden', 'Mburden', 'nsub',
                           'Nmin', 'Nmax', 'meanDp_nm', 'meanDp_num_nm',
                           'meanDp_mass_nm', 'reff_nm',
+                          # ---- the same three over the WHOLE BAND, added
+                          # 2026-08-13. NEW KEYS rather than a redefinition of the
+                          # four above: those are documented, plotted and logged as
+                          # PROBE-LEVEL quantities, and silently changing what a key
+                          # means would make two runs' timeseries incomparable with
+                          # nothing in the file to say which is which. Weighted by
+                          # AIR MASS (q*dp*W_LAT, the same measure Nbur/Mbur use),
+                          # so they are the band's true population moments, not an
+                          # average of per-level averages.
+                          'reff_dom_nm', 'meanDp_num_dom_nm',
+                          'meanDp_mass_dom_nm',
                           'clipMadd_cum', 'clipMrem_cum',
                           'B_adv_np', 'B_adv_pol', 'B_floor', 'B_micro', 'B_bc',
                           'B_settle', 'B_vf_in', 'B_vf_out', 'Nfloor_cum',
@@ -2084,6 +2095,25 @@ def main():
     # These are an ATTRIBUTION of part of adv_np/adv_pol, not extra stages.
     cumV = {'in': 0.0, 'out': 0.0}
     frames_num = []; frames_mas = []; frames_dT = []; frame_hours = []
+    frames_psd_n = []; frames_psd_m = []
+
+    def psd_zm(q):
+        """(NBINS, nlat): the size distribution of the WHOLE BAND, per latitude.
+
+        Vertical AIR-MASS mean (weight dp) and a plain zonal mean, leaving the
+        latitude axis intact so the caller can take a global area-weighted mean or
+        restrict to a band without a second pass over the 3-D field. Added
+        2026-08-13: frames_num/frames_mas are one level (KPROBE), so every
+        distribution plotted from them describes 51.7 hPa and not the band the
+        burdens are quoted over -- and in a drain run the probe level is the part
+        that changes least.
+
+        Costs (40, nlat) floats per frame -- 30 kB against the 42 MB the
+        probe-level frames already carry, so it is stored every frame rather than
+        being made an option.
+        """
+        return np.asarray((q * jnp.asarray(DP)[None, :, None, None]).sum(1)
+                          / DP.sum()).mean(-1)
     frames_so2 = []; frames_h2so4 = []
     KPROBE = int(np.argmin(np.abs(PLEV_PA / 100 - PROBE_HPA)))   # diagnostic probe level
     # Names the reservoir the boundary is actually served from. This was a
@@ -2098,10 +2128,15 @@ def main():
     # Printing _res for the gases mislabelled CESM-forced gases as "CARMA-forced"
     # whenever AER_SRC=carma, which is the wrong provenance to copy into a writeup.
     # BC_GAS=flux also means they are not forced at all, so "always" was wrong too.
+    # What a step ACTUALLY consists of. Both header lines said "advect+coag"
+    # unconditionally, which under MICRO=off names a process the run never calls
+    # -- and that is the one line a reader trusts to tell them what ran.
+    _PER_STEP = {'full': 'advect+micro', 'coag': 'advect+coag',
+                 'off': 'advect+settle only, NO microphysics'}[MICRO_MODE]
     _gas = ('CESM-forced (Dirichlet)'
             if _bc_gas0 != 'flux'
             else 'FLUX (open faces, NOT pinned to CESM)')
-    print(f"  STEP_HOURS={STEP_HOURS}h (advect+coag per step); "
+    print(f"  STEP_HOURS={STEP_HOURS}h ({_PER_STEP} per step); "
           f"vertical BC at {np.round(PLEV_PA[:N_BC_TOP]/100, 1)} / "
           f"{np.round(PLEV_PA[-N_BC_BOT:]/100, 1)} hPa: "
           + ("FLUX (continuity omega, open faces; aerosol inflow at the "
@@ -2124,6 +2159,7 @@ def main():
     # capture the true initial state as frame 0
     frames_num.append(np.asarray(num[:, KPROBE]).copy())
     frames_mas.append(np.asarray(mas[:, KPROBE]).copy())
+    frames_psd_n.append(psd_zm(num)); frames_psd_m.append(psd_zm(mas)) 
     frames_dT.append(np.asarray(dT_rad[KPROBE]).copy())
     frames_so2.append(np.asarray(so2[KPROBE]).copy())
     frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
@@ -2255,6 +2291,28 @@ def main():
             frame_hours = [int(h) for h in _fk['frame_hours']]
             frames_num = [a.copy() for a in _fk['frames_num']]
             frames_mas = [a.copy() for a in _fk['frames_mas']]
+            # Append-only, same rule as the D_* drain counters: a frames ckpt
+            # written before these existed resumes with an EMPTY psd history
+            # rather than being rejected. It is then shorter than frame_hours,
+            # and np.stack of two different lengths into one file would put the
+            # psd arrays on a time axis that is not theirs -- so drop the frames
+            # that predate the diagnostic instead of misdating them.
+            frames_psd_n = [a.copy() for a in _fk['frames_psd_num']] \
+                if 'frames_psd_num' in _fk.files else []
+            frames_psd_m = [a.copy() for a in _fk['frames_psd_mas']] \
+                if 'frames_psd_mas' in _fk.files else []
+            if len(frames_psd_n) != len(frames_num):
+                print(f"  NOTE: frames ckpt predates the vertically-averaged PSD "
+                      f"({len(frames_psd_n)} of {len(frames_num)} frames carry "
+                      f"it) -- dropping the earlier frames so every frame array "
+                      f"shares one time axis.", flush=True)
+                _kp = len(frames_psd_n)
+                frame_hours = frame_hours[-_kp:] if _kp else []
+                frames_num = frames_num[-_kp:] if _kp else []
+                frames_mas = frames_mas[-_kp:] if _kp else []
+                frames_dT = frames_dT[-_kp:] if _kp else []
+                frames_so2 = frames_so2[-_kp:] if _kp else []
+                frames_h2so4 = frames_h2so4[-_kp:] if _kp else []
             frames_dT = [a.copy() for a in _fk['frames_dT']]
             frames_so2 = [a.copy() for a in _fk['frames_so2']]
             frames_h2so4 = [a.copy() for a in _fk['frames_h2so4']]
@@ -2334,6 +2392,7 @@ def main():
             _keep = len(frame_hours) - _ndrop_fr
             frame_hours = frame_hours[:_keep]
             frames_num = frames_num[:_keep]; frames_mas = frames_mas[:_keep]
+            frames_psd_n = frames_psd_n[:_keep]; frames_psd_m = frames_psd_m[:_keep]
             frames_dT = frames_dT[:_keep]; frames_so2 = frames_so2[:_keep]
             frames_h2so4 = frames_h2so4[:_keep]
             print(f"  NOTE: frames ckpt ran {_ndrop_fr} frame(s) past the state "
@@ -2384,7 +2443,7 @@ def main():
     # about the run was wrong (N_STEPS comes from N_HOURS alone); only the label.
     print(f"\n{'='*60}\n{N_STEPS*STEP_HOURS/24:g}-day coupled run: "
           f"{N_STEPS} steps x {STEP_HOURS}h "
-          f"= {N_STEPS*STEP_HOURS}h, advect+coag every step"
+          f"= {N_STEPS*STEP_HOURS}h, {_PER_STEP} every step"
           + (f"  [RESUMING at step {s_start+1}]" if s_start else "")
           + f"\n{'='*60}", flush=True)
 
@@ -2618,8 +2677,13 @@ def main():
         M_set = Mbur(mas)                          # after settling (== M_mic if off)
         t_settle = time.time() - ts_set
         if PROFILE:
+            # Under MICRO=off nothing microphysical is called, but the timer
+            # still brackets the T (and, with WET_SETTLING/WET_OPTICS on, RELHUM)
+            # reads that the settling and the diagnostics need -- so it is a
+            # nonzero "micro=" on a run with no microphysics. Name what it is.
             print(f"  [prof] s={s} read={t_read:.2f}s advect={t_adv:.2f}s "
-                  f"micro={t_mic:.2f}s settle={t_settle:.2f}s (nsub={nsub})", flush=True)
+                  f"{'T/RH' if MICRO_MODE == 'off' else 'micro'}={t_mic:.2f}s "
+                  f"settle={t_settle:.2f}s (nsub={nsub})", flush=True)
 
         # MICRO_MODE guard: num_np/mas_np only exist when a micro engine ran. This
         # check is on the run_prod.sh path (DEBUG=1), so without the guard MICRO=off
@@ -2878,12 +2942,49 @@ def main():
             # would instead give a near-empty polar cell the same say as a plume cell.
             reff = float(0.5 * (_wnum * _dpw ** 3).sum()
                          / max((_wnum * _dpw ** 2).sum(), 1e-300))
+            # ---- the same moments over the WHOLE BAND ------------------------
+            # Same formulae, same wet diameters, but summed over every level with
+            # the air-mass weight q*dp*W_LAT instead of over one level with W_LAT.
+            # The probe level is 51.7 hPa near the TOP of a 1-150 hPa band, and in
+            # a drain run it is the slowest-changing part of it, so a probe-level
+            # r_eff is a poor stand-in for the aerosol the band actually holds.
+            #
+            # ONE LEVEL AT A TIME, not one vectorized 4-D expression: the wet
+            # diameter varies per (bin, level, lat, lon), so the full array is
+            # (40,24,192,288) = 425 MB in f64 and the moment sums would need
+            # several such temporaries at once. The loop keeps every temporary at
+            # the (40,192,288) size the probe-level block already pays for, and
+            # the sums it accumulates are exact -- reduction order is the only
+            # difference.
+            _m3 = _m2 = _mn = _mm = _wn_s = _wm_s = 0.0
+            for _k in range(nlev):
+                _nk = num_np[:, _k]; _mk = mas_np[:, _k]        # (NBINS,nlat,nlon)
+                if WET_OPTICS:
+                    _wtk = np.asarray(settling.equilibrium_wt_field(
+                        T3d[_k], rh3d[_k]))                      # (nlat,nlon)
+                    _dpk = np.asarray(settling.wet_size(
+                        MMID[:, None, None], _wtk[None], RHO_AER)[0]) * 1e9
+                else:
+                    _dpk = np.broadcast_to(DP_BIN[:, None, None], _nk.shape)
+                # air-mass weight: dp [Pa] x the area metric, i.e. the same
+                # measure the burdens close their budget in
+                _wk = (W_LAT[None, :, None] * DP[_k])
+                _wnk = _nk * _wk; _wmk = _mk * _wk
+                _m3 += (_wnk * _dpk ** 3).sum(); _m2 += (_wnk * _dpk ** 2).sum()
+                _mn += (_wnk * _dpk).sum();      _mm += (_wmk * _dpk).sum()
+                _wn_s += _wnk.sum();             _wm_s += _wmk.sum()
+            reff_dom = float(0.5 * _m3 / max(_m2, 1e-300))
+            meanDp_num_dom = float(_mn / max(_wn_s, 1e-300))
+            meanDp_mass_dom = float(_mm / max(_wm_s, 1e-300))
             ts['hours'].append(it1); ts['Nburden'].append(Nb); ts['Mburden'].append(Mb)
             ts['nsub'].append(int(nsub)); ts['Nmin'].append(float(num.min()))
             ts['Nmax'].append(float(num.max())); ts['meanDp_nm'].append(meanDp)
             ts['meanDp_num_nm'].append(meanDp_num)
             ts['meanDp_mass_nm'].append(meanDp_mass)
             ts['reff_nm'].append(reff)
+            ts['reff_dom_nm'].append(reff_dom)
+            ts['meanDp_num_dom_nm'].append(meanDp_num_dom)
+            ts['meanDp_mass_dom_nm'].append(meanDp_mass_dom)
             ts['clipMadd_cum'].append(clip_add_cum)
             ts['clipMrem_cum'].append(clip_rem_cum)
             for k in ('adv_np', 'adv_pol', 'floor', 'micro', 'settle', 'bc'):
@@ -2917,9 +3018,14 @@ def main():
             print(f"  step {s+1:3d}/{N_STEPS} (h{it1:4d}) {time.time()-t0:6.0f}s nsub={nsub:2d}  "
                   f"N/N0 {Nb/N0:.4f} (int {Nbi/N0i:.4f}, floor {nfloor_cum/N0:+.3f})  "
                   f"M/M0 {Mb/M0:.4f} (int {Mbi/M0i:.4f})  "
-                  f"r_eff {reff:6.1f}nm  "
-                  f"Dp(M/N) {meanDp:6.1f}nm  Dp(massw) {meanDp_mass:6.1f}nm  "
-                  f"Dp(num) {meanDp_num:6.1f}nm  "
+                  # BAND average first and probe level in parentheses. The
+                  # probe sits at 51.7 hPa near the top of a 1-150 hPa band, so
+                  # on its own it was answering a narrower question than the
+                  # rest of the line, which is all full-slab.
+                  f"r_eff {reff_dom:6.1f}nm (probe {reff:6.1f})  "
+                  f"Dp(M/N) {meanDp:6.1f}nm  "
+                  f"Dp(massw) {meanDp_mass_dom:6.1f}nm  "
+                  f"Dp(num) {meanDp_num_dom:6.1f}nm  "
                   f"clipM/M0 +{clip_add/M0:.1e}/{clip_rem/M0:.1e}  "
                   f"finite {bool(jnp.isfinite(num).all())}",
                   flush=True)
@@ -2984,6 +3090,7 @@ def main():
         if (s + 1) % FRAME_EVERY_STEPS == 0 or s == N_STEPS - 1:
             frames_num.append(np.asarray(num[:, KPROBE]).copy())
             frames_mas.append(np.asarray(mas[:, KPROBE]).copy())
+            frames_psd_n.append(psd_zm(num)); frames_psd_m.append(psd_zm(mas))
             frames_dT.append(np.asarray(dT_rad[KPROBE]).copy())
             frames_so2.append(np.asarray(so2[KPROBE]).copy())
             frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
@@ -2997,6 +3104,8 @@ def main():
             savez_atomic(f'coupled_frames_{OUT_TAG}_ckpt.npz',
                      frame_hours=np.array(frame_hours),
                      frames_num=np.stack(frames_num), frames_mas=np.stack(frames_mas),
+                     frames_psd_num=np.stack(frames_psd_n),
+                     frames_psd_mas=np.stack(frames_psd_m),
                      frames_dT=np.stack(frames_dT),
                      frames_so2=np.stack(frames_so2),
                      frames_h2so4=np.stack(frames_h2so4),
@@ -3061,6 +3170,8 @@ def main():
              phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
              frame_hours=np.array(frame_hours),
              frames_num=np.stack(frames_num), frames_mas=np.stack(frames_mas),
+             frames_psd_num=np.stack(frames_psd_n),
+             frames_psd_mas=np.stack(frames_psd_m),
              frames_dT=np.stack(frames_dT),
              frames_so2=np.stack(frames_so2),
              frames_h2so4=np.stack(frames_h2so4),

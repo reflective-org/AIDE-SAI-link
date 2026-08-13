@@ -62,7 +62,12 @@ nf = dT.shape[0]
 # cooling shows at its true tiny amplitude), mass zero-anchored.
 dpos = max(float(np.nanpercentile(dT, 99.8)), 1e-6)
 dnorm = mcolors.Normalize(vmin=-dpos, vmax=dpos)
-mnorm = mcolors.Normalize(0.0, float(np.nanpercentile(mass, 99.8)))
+# Same zero-anchor-only-if-it-earns-it rule as the filmstrip (plot_run.py FIG 2),
+# because the module docstring promises the GIF and the PNG share their norms --
+# changing one and not the other silently breaks the comparison it advertises.
+_mhi = float(np.nanpercentile(mass, 99.8))
+_mlo = float(np.nanpercentile(mass, 0.2))
+mnorm = mcolors.Normalize(_mlo if _mlo > 0.15 * _mhi else 0.0, _mhi)
 
 proj = ccrs.PlateCarree()
 FIELDS = [
@@ -71,6 +76,14 @@ FIELDS = [
     dict(name="so4", data=mass, cmap="viridis", norm=mnorm, coast="w",
          label="SO4 [x1e-9 kg/kg]", title="SO4 mass mixing ratio"),
 ]
+# A RAD=0 run (the advection-only comparison is one) carries dT_rad as exactly
+# zero at every frame, and the dTrad GIF is then a uniformly white map animated
+# over 90 days -- several MB of nothing, and worse, a figure that LOOKS like a
+# result. Drop the field rather than render it, and say which run it was.
+if not np.any(dT != 0):
+    FIELDS = [f for f in FIELDS if f["name"] != "dTrad"]
+    print(f"  dT_rad is identically zero in {TAG} (radiation off) "
+          f"-- skipping the dTrad GIF", flush=True)
 
 
 def render(field, outdir):
@@ -86,7 +99,8 @@ def render(field, outdir):
                          norm=field["norm"], transform=proj, shading="auto")
     ax.coastlines(linewidth=0.4, color=field["coast"])
     fig.colorbar(mesh, ax=ax, orientation="vertical", fraction=0.024, pad=0.01,
-                 aspect=22, label=field["label"], extend="max")
+                 aspect=22, label=field["label"],
+                 extend="both" if field["norm"].vmin > 0 else "max")
     ttl = fig.suptitle("", fontsize=12, fontweight="bold")
 
     paths = []

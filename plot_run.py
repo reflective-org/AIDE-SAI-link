@@ -9,6 +9,14 @@ the edit landed in week_sizedist.png while zonal90d_sizedist.png stayed stale.
   2) filmstrip      -> {TAG}_filmstrip.png   dT_rad + aerosol mass at the probe level
   3) size-dist      -> {TAG}_sizedist.png    dN/dlogDp evolution, two panels
                                              (global mean | 15S-15N), fixed axes
+  4) drainage       -> {TAG}_drain.png      how fast the band empties and through
+                                             where -- decay + e-folding time, the
+                                             settling/advective split, and that
+                                             split by latitude and by size. Drawn
+                                             only for runs carrying the resolved
+                                             D_* drain counters; it is the figure
+                                             of the AER_SRC=fixed MICRO=off
+                                             advection-only comparison.
 
   python3 plot_run.py [TAG]        # TAG defaults to zonal90d
 """
@@ -153,6 +161,44 @@ def wlat_full():
 
 hrs = np.asarray(ts["hours"], float); days = hrs / 24.0
 N0 = float(ts["N0"]); M0 = float(ts["M0"])
+
+
+def cfg(key, default=float("nan")):
+    """One field of the run's own scenario stamp, by name.
+
+    Read from the stamp rather than re-derived from the arrays because the stamp
+    is what the run REFUSES to resume across (coupling.py's INJ_CFG), so it is
+    the one description of the run that cannot silently disagree with it. Both
+    arrays are append-only, so a key absent from an older file is a missing
+    field, not an error.
+    """
+    k = [str(x) for x in ts["inj_cfg_keys"]] if "inj_cfg_keys" in ts.files else []
+    return float(ts["inj_cfg"][k.index(key)]) if key in k else default
+
+
+def phys(key, default=float("nan")):
+    """One field of the run's PHYS_CFG stamp, by name (see cfg() above)."""
+    k = [str(x) for x in ts["phys_cfg_keys"]] if "phys_cfg_keys" in ts.files else []
+    return float(ts["phys_cfg"][k.index(key)]) if key in k else default
+
+
+# ---- did this run have radiation and microphysics at all? -------------------
+# Asked of the OUTPUT, not of an env var or a branch name: a run with RAD=0 never
+# called the radiation driver, so aod550 is NaN at every step and dT_rad is
+# identically zero. Drawing those panels anyway produces a blank map row and an
+# empty axis -- figures that look like a result of zero rather than the absence
+# of a calculation. The alternative, a MIP-only copy of this script, is the
+# helper-script debt CLAUDE.md exists to stop; one data-driven test covers both
+# the advection comparison and any future RAD=0 run.
+_NO_INJ = cfg("INJ_SO2_TG_YR", 0.0) == 0 and cfg("INJ_H2SO4_TG_YR", 0.0) == 0
+RAD_OFF = (("aod550" not in ts.files or not np.isfinite(ts["aod550"]).any())
+           and ("dT_max" not in ts.files or not np.any(ts["dT_max"] != 0)))
+MICRO_OFF = phys("MICRO_OFF", 0.0) == 1.0
+
+# AER_SRC is stamped as an index into coupling.py's ('mam4','carma','fixed');
+# 2 == the prescribed uniform PSD of the advection-only comparison, which is the
+# only IC whose per-bin split at one level is also the global one (FIG 4d).
+_IS_FIXED = cfg("AER_SRC") == 2
 N_DAYS_RUN = days[-1]                                  # actual run duration, for titles
 # samples per day -- nucleation is OH-driven so anything number-related carries a
 # strong diurnal cycle that aliases against the 6h sampling
@@ -253,13 +299,22 @@ def p_burden(ax, letter="a"):
             f"M0 = {M0 * BURDEN_TG:.3f} Tg SO4 ({M0 * BURDEN_TG * S_PER_SO4:.3f} Tg S)",
             transform=ax.transAxes, va="top", ha="left", fontsize=7, family="monospace",
             bbox=dict(boxstyle="round,pad=0.35", fc="w", ec="0.8", alpha=0.9))
-    ax.set_title(f"({letter}) burden: number turnover vs injection-driven mass gain")
+    # The title names the mechanism, so it has to follow the run: with INJ_* at
+    # zero there is no injection and mass only falls, and "injection-driven mass
+    # gain" over a monotonically decreasing curve is a caption contradicting the
+    # data underneath it.
+    ax.set_title(f"({letter}) burden: "
+                 + ("number and mass drain out of the band" if _NO_INJ
+                    else "number turnover vs injection-driven mass gain"))
     ax.set_xlabel("day")
     # M/M0 is on the twin axis, so a plain ax.legend() left it out entirely -- merge
     # both axes' handles or the panel's second curve goes unnamed
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
-    ax.legend(h1 + h2, l1 + l2, loc="lower right", fontsize=7, framealpha=0.85)
+    # Upper right: on a monotonic drain both curves run down to the lower-right
+    # corner and the legend sat on top of their endpoints -- the part of the
+    # panel the eye goes to for the final drained fraction.
+    ax.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=7, framealpha=0.85)
     ax.grid(alpha=0.25)
 
 # (b) AOD550 + TOA forcing, the optical and the flux view of the same aerosol
@@ -325,7 +380,13 @@ try:
 except Exception:
     PROBE_HPA_LBL = "probe level"
 
-_HAS_REFF = "reff_nm" in ts.files
+# The BAND-average moments (added 2026-08-13) when the run recorded them, else
+# the probe-level ones. Which is plotted changes what the panel MEANS -- one
+# level near the top of the band against the whole band -- so the choice is
+# carried into the panel title rather than left to the reader to assume.
+_HAS_DOM = "reff_dom_nm" in ts.files and np.isfinite(ts["reff_dom_nm"]).any()
+_REFF_KEY = "reff_dom_nm" if _HAS_DOM else "reff_nm"
+_HAS_REFF = _REFF_KEY in ts.files
 
 
 def effective_diameter():
@@ -342,7 +403,8 @@ def effective_diameter():
         # AREA-WEIGHTED moments on the WET droplet diameter (WET_OPTICS), i.e. the
         # same size the Mie tables are built on. Returns BEFORE get_num(), so a
         # run that recorded reff_nm never pays for the frames read at all.
-        return days, 2.0 * np.asarray(ts["reff_nm"], float), "wet effective diameter"
+        return (days, 2.0 * np.asarray(ts[_REFF_KEY], float),
+                "wet effective diameter")
     if not FRAMES_OK:
         return None
     num = get_num()
@@ -383,11 +445,13 @@ def p_size(ax, letter="c"):
     else:
         _x, _y, _lab = DEFF
         ax.plot(_x, _y, "o-", color=C["b"], ms=3.5, lw=1.8, label=_lab)
-    # NOTE: unlike the burden and budget panels, which are full-slab, this one is a
-    # SINGLE LEVEL -- the KPROBE probe level (51.7 hPa, the injection level). Say so
-    # in the title; it read as a slab quantity purely from its company on the figure.
-    ax.set_title(f"({letter}) effective diameter of the aerosol  @ {PROBE_HPA_LBL}",
-                 fontsize=10)
+    # WHERE this is measured goes in the title. It used to be a SINGLE LEVEL on a
+    # figure whose other panels are all full-slab, which read as a slab quantity
+    # purely from its company; runs carrying reff_dom_nm now really are full-slab
+    # and the title has to keep the two apart.
+    ax.set_title(f"({letter}) effective diameter of the aerosol  "
+                 + ("(band average, air-mass weighted)" if _HAS_DOM
+                    else f"@ {PROBE_HPA_LBL}"), fontsize=10)
     ax.set_xlabel("day")
     ax.set_ylabel("effective diameter $D_{eff}$ [nm]")
     # one curve now, but it is U-shaped (nucleation burst down, then condensational
@@ -414,7 +478,11 @@ def p_size(ax, letter="c"):
 # carry (with Tg on a secondary_yaxis) is gone -- Tg is the unit the stage terms
 # are actually compared in, and one axis cannot be misread for the other.
 MTG = M0 * BURDEN_TG                       # Tg SO4 per unit of dM/M0
-BIG = [("B_micro", "micro (source)", C["num"]), ("B_adv_np", "advect (sink)", C["a"])]
+# Under MICRO=off the micro stage is not a small source, it is an ABSENT one --
+# every entry is exactly 0.0 -- so it is dropped from the budget rather than
+# drawn as a flat line at zero with "(source)" in the legend.
+BIG = ([] if MICRO_OFF else [("B_micro", "micro (source)", C["num"])]) \
+    + [("B_adv_np", "advect (sink)", C["a"])]
 SMALL = [("B_settle", "settle", C["b"]), ("B_floor", "floor", C["so2"]),
          ("B_adv_pol", "polar", C["h2so4"]), ("B_bc", "bc", C["arf"])]
 _have = [k for k, _, _ in BIG + SMALL if k in ts.files]
@@ -458,13 +526,28 @@ print(f"  budget closure: sum {bsum[-1]:+.6f}  vs  M/M0-1 "
 # figsize keeps the ~5.7x4.5in panel of the old 2x3 so the fonts stay the size
 # they were tuned at; shrinking the canvas to 2 columns instead would make every
 # legend and text box on the figure relatively larger.
-fig, axs = plt.subplots(2, 2, figsize=(11.5, 9))
-fig.suptitle(f"{N_DAYS_RUN:.0f}-day coupled run ({TAG}): closed aerosol-radiation-microphysics loop",
-             fontsize=14, fontweight="bold")
-p_burden(axs[0, 0], "a")
-p_aod(axs[0, 1], "b")
-p_size(axs[1, 0], "c")
-p_budget(axs[1, 1], "d")
+# The AOD/forcing panel is dropped outright when the run had no radiation --
+# not left blank -- and the remaining three go in one row rather than into a 2x2
+# with a hole in it. Panel LETTERS follow the layout actually drawn, so (b) is
+# whatever is second on the page; a figure whose panels skip a letter reads as
+# one that lost a panel in production.
+if RAD_OFF:
+    fig, axs = plt.subplots(1, 3, figsize=(17.25, 4.9))
+    fig.suptitle(f"{N_DAYS_RUN:.0f}-day "
+                 + ("transport-only" if MICRO_OFF else "coupled")
+                 + f" run ({TAG}): "
+                 + ("advection + settling, no radiation and no microphysics"
+                    if MICRO_OFF else "microphysics without radiation"),
+                 fontsize=14, fontweight="bold")
+    p_burden(axs[0], "a"); p_size(axs[1], "b"); p_budget(axs[2], "c")
+else:
+    fig, axs = plt.subplots(2, 2, figsize=(11.5, 9))
+    fig.suptitle(f"{N_DAYS_RUN:.0f}-day coupled run ({TAG}): closed aerosol-radiation-microphysics loop",
+                 fontsize=14, fontweight="bold")
+    p_burden(axs[0, 0], "a")
+    p_aod(axs[0, 1], "b")
+    p_size(axs[1, 0], "c")
+    p_budget(axs[1, 1], "d")
 fig.tight_layout(rect=[0, 0, 1, 0.95])
 save(fig, "dashboard")
 
@@ -503,8 +586,12 @@ if not _missing:
     # PlateCarree axes are aspect-locked 2:1, so the figure height has to follow the
     # column width or the two rows float apart with a band of dead space between them
     COL_W = 4.2
-    fig = plt.figure(figsize=(COL_W * len(sel), COL_W + 1.1), constrained_layout=True)
-    fig.suptitle(f"Spatial evolution @ {probe:.1f} hPa: radiative heating (top) & aerosol mass (bottom)",
+    nrow = 1 if RAD_OFF else 2
+    fig = plt.figure(figsize=(COL_W * len(sel), COL_W * nrow / 2 + 1.1),
+                     constrained_layout=True)
+    fig.suptitle(f"Spatial evolution @ {probe:.1f} hPa: "
+                 + ("aerosol mass" if RAD_OFF
+                    else "radiative heating (top) & aerosol mass (bottom)"),
                  fontsize=13, fontweight="bold")
     # dT is strongly one-sided: ~-0.12 K of cooling against ~+3.9 K of heating.
     # Scale SYMMETRICALLY about 0 off the heating limb -- white stays at zero and
@@ -513,29 +600,49 @@ if not _missing:
     # colormap and make trivial cooling look as strong as the heating.
     dpos = max(float(np.nanpercentile(dT[sel], 99.5)), 1e-6)
     dnorm = mcolors.Normalize(vmin=-dpos, vmax=dpos)
-    mvmax = np.nanpercentile(mass[sel] * 1e9, 99.5)
-    mnorm = mcolors.Normalize(0, mvmax)
+    # SO4 scale. Zero-anchored is right for an INJECTION run, where the plume is
+    # a local enhancement over ~nothing and an offset floor would hide how much of
+    # the map the plume has not reached. It is exactly wrong for a DRAINING run
+    # started from a uniform background: the field spans 2.0 -> 1.4e-9 kg/kg and
+    # anchoring at 0 spends 70% of the colormap on values that never occur, which
+    # is why the drain filmstrip came out five near-identical yellow panels.
+    # Decide from the data rather than from the run type: keep the zero anchor
+    # only when the low end really does approach zero.
+    mvmax = float(np.nanpercentile(mass[sel] * 1e9, 99.5))
+    mvmin = float(np.nanpercentile(mass[sel] * 1e9, 0.5))
+    if mvmin > 0.15 * mvmax:
+        mnorm = mcolors.Normalize(mvmin, mvmax)
+    else:
+        mnorm = mcolors.Normalize(0, mvmax)
     # keep the two rows in their own lists -- add_subplot appends to fig.axes in
     # call order (axt0, axm0, axt1, ...), so slicing fig.axes interleaves the rows
     # and anchors each colorbar to a full-height mix of both
     top_axes, bot_axes = [], []
     for j, fi in enumerate(sel):
-        axt = fig.add_subplot(2, len(sel), j + 1, projection=proj)
-        axt.pcolormesh(lon, lat, dT[fi], cmap="RdBu_r",
-                       norm=dnorm, transform=proj, shading="auto")
-        axt.coastlines(linewidth=0.3, color="0.3"); axt.set_title(f"day {fh[fi]/24:.1f}", fontsize=10)
-        top_axes.append(axt)
-        axm = fig.add_subplot(2, len(sel), len(sel) + j + 1, projection=proj)
+        if not RAD_OFF:
+            axt = fig.add_subplot(nrow, len(sel), j + 1, projection=proj)
+            axt.pcolormesh(lon, lat, dT[fi], cmap="RdBu_r",
+                           norm=dnorm, transform=proj, shading="auto")
+            axt.coastlines(linewidth=0.3, color="0.3")
+            axt.set_title(f"day {fh[fi]/24:.1f}", fontsize=10)
+            top_axes.append(axt)
+        # the day label belongs to whichever row is on top
+        axm = fig.add_subplot(nrow, len(sel), (nrow - 1) * len(sel) + j + 1,
+                              projection=proj)
         axm.pcolormesh(lon, lat, mass[fi] * 1e9, cmap="viridis", norm=mnorm,
                        transform=proj, shading="auto")
         axm.coastlines(linewidth=0.3, color="w")
+        if RAD_OFF:
+            axm.set_title(f"day {fh[fi]/24:.1f}", fontsize=10)
         bot_axes.append(axm)
-    sm1 = plt.cm.ScalarMappable(cmap="RdBu_r", norm=dnorm)
+    if top_axes:
+        sm1 = plt.cm.ScalarMappable(cmap="RdBu_r", norm=dnorm)
+        fig.colorbar(sm1, ax=top_axes, orientation="vertical", fraction=0.02,
+                     pad=0.01, aspect=18, label="dT_rad [K]", extend="max")
     sm2 = plt.cm.ScalarMappable(cmap="viridis", norm=mnorm)
-    fig.colorbar(sm1, ax=top_axes, orientation="vertical", fraction=0.02, pad=0.01,
-                 aspect=18, label="dT_rad [K]", extend="max")
     fig.colorbar(sm2, ax=bot_axes, orientation="vertical", fraction=0.02, pad=0.01,
-                 aspect=18, label="SO4 [x1e-9 kg/kg]", extend="max")
+                 aspect=18 // nrow, label="SO4 [x1e-9 kg/kg]",
+                 extend="both" if mnorm.vmin > 0 else "max")
     save(fig, "filmstrip", bbox_inches="tight")
 
 # =====================================================================
@@ -553,7 +660,7 @@ if not _missing:
 # the y top is above the largest value either region reaches (~1.2e5 cm-3 STP,
 # the tropical ultrafine end at day 0) with a little headroom.
 SIZEDIST_XLIM = (10.0, 2000.0)     # dry diameter Dp [nm]
-SIZEDIST_YLIM = (1e-1, 3e5)        # dN/dlogDp [cm-3 STP]
+SIZEDIST_YLIM = (1e-2, 1e3)        # dN/dlogDp [cm-3 STP]
 
 # Smallest bin to PLOT. Everything below this is dropped from the curves, not
 # merely hidden by xlim, so the y-autoscale and the eye both ignore it.
@@ -587,7 +694,13 @@ RHO_STP = 101325.0 / (287.05 * 273.15)   # kg/m3, dry air at 0 C / 1 atm
 # area metric from wlat_full() -- the dashboard's size panel needs the same three.
 # Same reasoning as the filmstrip above: skip rather than die, so a frames file
 # that cannot give this figure its inputs still leaves the other two standing.
-_no_num = not FRAMES_OK or "frames_num" not in fr.files
+# Prefer the vertically-averaged PSD (frames_psd_num, added 2026-08-13) over the
+# probe-level frames. frames_num is ONE LEVEL, so every distribution drawn from
+# it describes 51.7 hPa while the burdens beside it are quoted over the whole
+# 1-150 hPa band -- and in a drain run the probe level is the slowest-changing
+# part of the band, so it understates exactly what the figure is for.
+_HAS_PSD = FRAMES_OK and "frames_psd_num" in fr.files
+_no_num = not FRAMES_OK or ("frames_num" not in fr.files and not _HAS_PSD)
 if _no_num:
     print(f"  size-distribution SKIPPED: {TAG} frames file "
           + (f"has no frames_num (has {', '.join(sorted(fr.files))})" if FRAMES_OK
@@ -602,30 +715,49 @@ if not _no_num:
         # below (sum of weights actually used) stays a single expression
         _wf = wlat_full()
         wlat = _wf if latmask is None else np.where(latmask, _wf, 0.0)
-        w = wlat[None, None, :, None]
-        # get_num(), not fr["frames_num"]: this function is called once per panel and
-        # an NpzFile member re-reads (1.6 GB here) on every access
-        num = get_num()
-        num_m = ((num * w).sum(axis=(2, 3))
-                 / (w.sum() * num.shape[3]))            # (nf,40) regional mean, #/kg
+        if _HAS_PSD:
+            # (nf,40,nlat), already an air-mass-weighted vertical mean and a zonal
+            # mean, so only the latitude reduction is left to do here
+            psd = np.asarray(fr["frames_psd_num"], float)
+            num_m = ((psd * wlat[None, None, :]).sum(axis=2)
+                     / max(wlat.sum(), 1e-300))         # (nf,40), #/kg
+        else:
+            w = wlat[None, None, :, None]
+            # get_num(), not fr["frames_num"]: this function is called once per
+            # panel and an NpzFile member re-reads (1.6 GB here) on every access
+            num = get_num()
+            num_m = ((num * w).sum(axis=(2, 3))
+                     / (w.sum() * num.shape[3]))        # (nf,40) regional mean, #/kg
         print(f"  sizedist: STP normalization, rho={RHO_STP:.5f} kg/m3 "
-              f"(probe level is {float(fr['probe_hpa']):.1f} hPa); "
-              f"plotted {int(keep.sum())}/{keep.size} bins, Dp >= {DP_MIN_NM:.0f} nm"
+              + ("(band average over all levels)" if _HAS_PSD else
+                 f"(probe level is {float(fr['probe_hpa']):.1f} hPa)")
+              + f"; plotted {int(keep.sum())}/{keep.size} bins, "
+              f"Dp >= {DP_MIN_NM:.0f} nm"
               + ("" if latmask is None else
                  f", {int(latmask.sum())}/{latmask.size} lat rows"), flush=True)
         return num_m * (RHO_STP / 1.0e6) / dlogDp[None, :]    # cm-3 STP per dlog10(Dp)
 
     # tropics: the injection band plus the ascending branch of the Brewer-Dobson
     # circulation, i.e. where the plume actually is for the first weeks
+    # The tropics panel exists to show the ENHANCEMENT over the global mean in the
+    # injection band -- read off the offset between two identically-scaled panels.
+    # With INJ_* at zero there is no plume and no enhancement to read: the two
+    # panels are the same distribution twice, and the second one invites a
+    # comparison that has nothing in it.
     TROPIC_LAT = 15.0
-    PANELS = [("(a) global", dNdlogDp_of()),
-              (f"(b) tropics ({TROPIC_LAT:.0f}S-{TROPIC_LAT:.0f}N)",
-               dNdlogDp_of(latmask=np.abs(lat_full()) <= TROPIC_LAT))]
+    PANELS = [("global", dNdlogDp_of())]
+    if not _NO_INJ:
+        PANELS = [("(a) global", PANELS[0][1]),
+                  (f"(b) tropics ({TROPIC_LAT:.0f}S-{TROPIC_LAT:.0f}N)",
+                   dNdlogDp_of(latmask=np.abs(lat_full()) <= TROPIC_LAT))]
 
     cmap = plt.cm.viridis
     # sharey (not just equal set_ylim) so the right panel loses its tick labels too:
     # repeating them invites reading the panels as separately scaled
-    fig, axs = plt.subplots(1, 2, figsize=(13.5, 5.8), sharex=True, sharey=True)
+    fig, axs = plt.subplots(1, len(PANELS), squeeze=False,
+                            figsize=(7.6 if len(PANELS) == 1 else 13.5, 5.8),
+                            sharex=True, sharey=True)
+    axs = axs[0]
     for ax, (label, dNdlogDp) in zip(axs, PANELS):
         for fi in range(nf):
             ax.plot(Dp_mid[keep], dNdlogDp[fi][keep],
@@ -643,14 +775,210 @@ if not _no_num:
     # a truncated checkpoint, where the series reached day 334 but frames end at 302.
     _frame_days = fh[-1] / 24.0
     fig.suptitle(f"Particle-size distribution evolution ({_frame_days:.0f} days) "
-                 f"@ {float(fr['probe_hpa']):.1f} hPa",
+                 + ("over the whole band (air-mass-weighted vertical mean)"
+                    if _HAS_PSD else f"@ {float(fr['probe_hpa']):.1f} hPa"),
                  fontsize=12, fontweight="bold")
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=mcolors.Normalize(0, fh[-1] / 24))
     fig.colorbar(sm, ax=axs, label="day", fraction=0.03, pad=0.11)
     # no tight_layout: it fights the colorbar's shared-axes placement. right= has to
     # leave room for BOTH the bar and its pad, or the bar is pushed off the canvas.
-    fig.subplots_adjust(left=0.07, right=0.855, top=0.86, bottom=0.11, wspace=0.06)
+    fig.subplots_adjust(left=0.07 if len(PANELS) > 1 else 0.11,
+                        right=0.855 if len(PANELS) > 1 else 0.80,
+                        top=0.86, bottom=0.11, wspace=0.06)
     save(fig, "sizedist")
+
+# =====================================================================
+# FIG 4 -- drainage: how fast the band empties, and through where
+#   -> {TAG}_drain.png, only for runs that recorded the resolved drain
+#      counters (D_* in the timeseries, added 2026-08-13).
+# =====================================================================
+# This is THE figure of the advection-only inter-model comparison
+# (AER_SRC=fixed MICRO=off RAD=0): with no source and no microphysics the
+# burden only falls, and the question is how fast, through which face, at which
+# latitudes and at which sizes. The other three figures answer none of that --
+# the dashboard's budget panel has the two channels globally summed, and the
+# filmstrip shows one level.
+#
+# The two channels are NEVER merged into one curve, because they are the two
+# halves the comparison is meant to separate: settling depends on the model's
+# temperature and nothing else and should be nearly model-independent, while the
+# advective flux through the same face IS the residual circulation and is where
+# two dycores are expected to disagree.
+_DK = ('D_setM_lat', 'D_vfM_lat', 'D_setM_bin', 'D_vfM_bin')
+_have_drain = all(k in ts.files for k in _DK)
+if _have_drain:
+    # Cumulative, burden units, positive = left the band through the bottom.
+    dlat_s = np.asarray(ts["D_setM_lat"], float)      # (nt, nlat)
+    dlat_v = np.asarray(ts["D_vfM_lat"], float)
+    dbin_s = np.asarray(ts["D_setM_bin"], float)      # (nt, nbins)
+    dbin_v = np.asarray(ts["D_vfM_bin"], float)
+    # A RESUME across the commit that added these keys NaN-pads the earlier
+    # records (see coupling.py's _TS_VEC note), so take the last row that is
+    # actually finite rather than [-1] and say so if they differ.
+    _fin = np.where(np.isfinite(dlat_s).all(1) & np.isfinite(dlat_v).all(1))[0]
+    _have_drain = _fin.size > 0
+if not _have_drain:
+    print(f"  drainage figure SKIPPED: {TAG} has no finite D_* drain counters "
+          f"(pre-2026-08-13 run, or resumed onto one)", flush=True)
+else:
+    iL = int(_fin[-1])
+    # A smoke run is a fraction of a day, and "%.0f days" prints that as "0" --
+    # a figure titled "0 days" for a run that clearly integrated something.
+    def _dfmt(d):
+        return f"{d:.1f}" if d < 10 else f"{d:.0f}"
+    if iL != len(days) - 1:
+        print(f"  drainage: last finite drain record is day {days[iL]:.1f} of "
+              f"{days[-1]:.1f} (earlier records NaN-padded by a RESUME)", flush=True)
+    latd = (np.asarray(fr["lat"]) if (fr is not None and "lat" in fr.files)
+            else np.linspace(-90, 90, dlat_s.shape[1]))
+    # everything below is a FRACTION OF THE INITIAL BURDEN -- the run is linear in
+    # the aerosol under MICRO=off, so the absolute scale carries no information
+    fs, fv = dlat_s / M0, dlat_v / M0
+    tot_s, tot_v = fs.sum(1), fv.sum(1)               # (nt,) global cumulative
+
+    def p_decay(ax, letter="a"):
+        """(a) what is left, and the e-folding time that implies."""
+        mrat = ts["Mburden"] / M0
+        ax.plot(days, mrat, "-", color=C["mass"], lw=2.0, label="M / M0  (mass)")
+        ax.plot(days, ts["Nburden"] / N0, "-", color=C["num"], lw=1.2, alpha=0.8,
+                label="N / N0  (number)")
+        ax.axhline(1 / np.e, color="0.5", ls=":", lw=1.0)
+        ax.text(days[1] if len(days) > 1 else 0, 1 / np.e, " 1/e", va="bottom",
+                ha="left", fontsize=8, color="0.4")
+        # Two residence times, and they are different numbers whenever the decay
+        # is not a single exponential (it is not: the fast-draining lowest levels
+        # empty first, so the rate slows). Quote both rather than pick one.
+        #   tau_fit  : slope of ln(M/M0) over the LAST HALF -- the late-time rate
+        #   tau_bulk : t / ln(M0/M) at the end -- the whole-run average
+        good = np.isfinite(mrat) & (mrat > 0)
+        half = good & (days >= 0.5 * days[-1])
+        txt = []
+        if half.sum() >= 3:
+            sl = np.polyfit(days[half], np.log(mrat[half]), 1)[0]
+            if sl < 0:
+                txt.append(f"tau (late, day {_dfmt(days[half][0])}+) = {-1/sl:6.1f} d")
+        if mrat[-1] > 0 and mrat[-1] < 1:
+            txt.append(f"tau (run mean)          = "
+                       f"{days[-1] / np.log(1 / mrat[-1]):6.1f} d")
+        txt.append(f"drained by day {_dfmt(days[-1])}      = {1 - mrat[-1]:6.1%}")
+        ax.text(0.97, 0.95, "\n".join(txt), transform=ax.transAxes, va="top",
+                ha="right", fontsize=8.5, family="monospace",
+                bbox=dict(boxstyle="round,pad=0.4", fc="w", ec="0.8", alpha=0.9))
+        ax.set_yscale("log")
+        ax.set_title(f"({letter}) band burden -- a pure drain, no source")
+        ax.set_xlabel("day"); ax.set_ylabel("remaining / initial")
+        ax.legend(loc="lower left", fontsize=8, framealpha=0.85)
+        ax.grid(alpha=0.25, which="both")
+
+    def p_channel(ax, letter="b"):
+        """(b) the two channels over time, cumulative, plus the closure check."""
+        ax.plot(days, 100 * tot_v, "-", color=C["a"], lw=2.0,
+                label="advective flux through the base")
+        ax.plot(days, 100 * tot_s, "-", color=C["b"], lw=2.0,
+                label="gravitational settling")
+        ax.plot(days, 100 * (tot_s + tot_v), "--", color="0.35", lw=1.2,
+                label="total drained")
+        # The band has FOUR loss channels, not two. Plotting the base pair against
+        # 1-M/M0 and calling the gap a "scheme residual" was wrong: it was
+        # dominated by the two channels left off the figure -- outflow through the
+        # TOP face and the polar-cap stirring -- so it charged real physics to the
+        # advection scheme. Both are small here (0.42% and 0.30% of M0 over 90
+        # days against 45.6% through the base) but they are not zero, and the
+        # figure's own closure check is what has to prove that rather than assume
+        # it. B_vf_in/B_adv_pol are stored as SIGNED and negative for a loss;
+        # negate so every curve on this panel is a positive amount lost.
+        if "B_vf_in" in ts.files:
+            ax.plot(days, -100 * np.asarray(ts["B_vf_in"], float), "-",
+                    color=C["so2"], lw=1.2, label="outflow through the top face")
+        if "B_adv_pol" in ts.files:
+            ax.plot(days, -100 * np.asarray(ts["B_adv_pol"], float), "-",
+                    color=C["h2so4"], lw=1.2, label="polar-cap stirring")
+        lost = 100 * (1 - ts["Mburden"] / M0)
+        ax.plot(days, lost, ":", color=C["mass"], lw=1.6, label="1 - M/M0")
+        # The residual the RUN reports, in the run's own terms: what the advection
+        # stages took out of the slab minus what actually crossed its faces. That
+        # is the number the step log prints as "advection numerical residual", so
+        # the figure and the log cannot drift apart.
+        _res = (float(np.asarray(ts["B_adv_np"])[-1]
+                      + np.asarray(ts["B_adv_pol"])[-1]
+                      - np.asarray(ts["B_vf_in"])[-1]
+                      - np.asarray(ts["B_vf_out"])[-1])
+                if all(k in ts.files for k in
+                       ("B_adv_np", "B_adv_pol", "B_vf_in", "B_vf_out")) else float("nan"))
+        ax.text(0.03, 0.95, f"advection numerical residual at day "
+                f"{_dfmt(days[-1])}: {100 * _res:+.4f} % of M0",
+                transform=ax.transAxes, va="top",
+                ha="left", fontsize=8.5, family="monospace",
+                bbox=dict(boxstyle="round,pad=0.4", fc="w", ec="0.8", alpha=0.9))
+        ax.set_title(f"({letter}) cumulative loss by channel (all four)")
+        ax.set_xlabel("day"); ax.set_ylabel("% of initial mass")
+        add_headroom(ax, 0.18)
+        ax.legend(loc="center left", fontsize=8, framealpha=0.85)
+        ax.grid(alpha=0.25)
+
+    def p_lat(ax, letter="c"):
+        """(c) WHERE it leaves. Cumulative loss per latitude row, both channels."""
+        ax.plot(latd, 100 * fv[iL], "-", color=C["a"], lw=1.6, label="advective")
+        ax.plot(latd, 100 * fs[iL], "-", color=C["b"], lw=1.6, label="settling")
+        ax.axhline(0, color="0.6", lw=0.8)
+        # NET, not gross: each row is summed over longitude and over every
+        # substep, so a row where air ascends into the band cancels one where it
+        # descends. A negative advective value is therefore a net INFLOW of
+        # aerosol-free air, i.e. dilution -- not a sign error.
+        ax.fill_between(latd, 0, 100 * fv[iL], where=(fv[iL] < 0),
+                        color=C["a"], alpha=0.15)
+        ax.set_title(f"({letter}) net loss through the base by latitude "
+                     f"(day {_dfmt(days[iL])})")
+        ax.set_xlabel("latitude [deg]")
+        ax.set_ylabel("% of initial mass, per lat row")
+        ax.set_xlim(-90, 90); ax.set_xticks([-90, -60, -30, 0, 30, 60, 90])
+        ax.legend(loc="upper center", fontsize=8, framealpha=0.85)
+        ax.grid(alpha=0.25)
+
+    def p_size(ax, letter="d"):
+        """(d) drainage-vs-size, the curve MICRO=off gets for free.
+
+        The bins are independent passive tracers, so one run is a 40-point sweep
+        over fall speed. Normalizing each bin by ITS OWN initial mass is what
+        makes the panel a rate curve rather than a picture of the initial PSD --
+        and that per-bin initial mass is only recoverable because the fixed-PSD
+        IC is uniform in space, so the probe level's bin split IS the global one.
+        Without frames, fall back to the raw per-bin loss.
+        """
+        f0 = None
+        if FRAMES_OK and "frames_mas" in fr.files and _IS_FIXED:
+            w = wlat_full()[None, :, None]
+            m0b = (fr["frames_mas"][0] * w).sum(axis=(1, 2))       # (nbins,)
+            if m0b.sum() > 0:
+                f0 = m0b / m0b.sum()
+        x = Dp_mid if Dp_mid is not None else np.arange(dbin_s.shape[1]) + 1.0
+        if f0 is not None:
+            den = np.where(f0 > 0, f0 * M0, np.nan)
+            ys, yv = dbin_s[iL] / den, dbin_v[iL] / den
+            ylab = "% of that bin's initial mass"
+        else:
+            ys, yv = dbin_s[iL] / M0, dbin_v[iL] / M0
+            ylab = "% of TOTAL initial mass"
+        ax.plot(x, 100 * yv, "o-", color=C["a"], ms=3, lw=1.4, label="advective")
+        ax.plot(x, 100 * ys, "o-", color=C["b"], ms=3, lw=1.4, label="settling")
+        ax.plot(x, 100 * (ys + yv), "--", color="0.35", lw=1.2, label="total")
+        if Dp_mid is not None:
+            ax.set_xscale("log"); ax.set_xlabel("dry diameter Dp [nm]")
+        else:
+            ax.set_xlabel("size bin")
+        ax.set_title(f"({letter}) loss by size (day {_dfmt(days[iL])})")
+        ax.set_ylabel(ylab)
+        ax.legend(loc="upper left", fontsize=8, framealpha=0.85)
+        ax.grid(alpha=0.25, which="both")
+
+    fig, axs = plt.subplots(2, 2, figsize=(11.5, 9))
+    fig.suptitle(f"Drainage out of the band ({TAG}): "
+                 f"{'transport-only' if _IS_FIXED else 'aerosol'} run, "
+                 f"{_dfmt(days[iL])} days", fontsize=14, fontweight="bold")
+    p_decay(axs[0, 0], "a"); p_channel(axs[0, 1], "b")
+    p_lat(axs[1, 0], "c"); p_size(axs[1, 1], "d")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    save(fig, "drain")
 
 # ---- console summary ----
 print("\n=== run summary ===", flush=True)
@@ -665,11 +993,14 @@ print(f"  SO2: {ts['SO2burden'][0]*BURDEN_TG:.4f} -> {ts['SO2burden'][-1]*BURDEN
       f"   (injected {ts['injSO2_cum'][-1]*BURDEN_TG:.3f} Tg SO2 cumulative)", flush=True)
 print(f"  H2SO4(g): {ts['H2SO4burden'][0]*BURDEN_TG:.3e} -> "
       f"{ts['H2SO4burden'][-1]*BURDEN_TG:.3e} Tg H2SO4", flush=True)
-print(f"  dT_max: {ts['dT_max'][0]:.4f} -> {ts['dT_max'][-1]:.4f} K", flush=True)
-_arfk = "arf_toa_avg" if "arf_toa_avg" in ts.files else "arf_toa"
-print(f"  ARF_toa ({'24h mean' if _arfk.endswith('avg') else 'INSTANTANEOUS'}): "
-      f"{ts[_arfk][0]:.4f} -> {ts[_arfk][-1]:.4f} W/m2", flush=True)
-print(f"  AOD550: {ts['aod550'][0]:.4f} -> {ts['aod550'][-1]:.4f}  (dimensionless)", flush=True)
+if RAD_OFF:
+    print("  radiation: OFF (no dT_rad, no ARF, no AOD)", flush=True)
+else:
+    print(f"  dT_max: {ts['dT_max'][0]:.4f} -> {ts['dT_max'][-1]:.4f} K", flush=True)
+    _arfk = "arf_toa_avg" if "arf_toa_avg" in ts.files else "arf_toa"
+    print(f"  ARF_toa ({'24h mean' if _arfk.endswith('avg') else 'INSTANTANEOUS'}): "
+          f"{ts[_arfk][0]:.4f} -> {ts[_arfk][-1]:.4f} W/m2", flush=True)
+    print(f"  AOD550: {ts['aod550'][0]:.4f} -> {ts['aod550'][-1]:.4f}  (dimensionless)", flush=True)
 print(f"  meanDp(num): {ts['meanDp_num_nm'][0]:.1f} -> {ts['meanDp_num_nm'][-1]:.1f} nm", flush=True)
 if DEFF is not None:
     _dv = DEFF[1]
