@@ -272,13 +272,37 @@ ADV_WCONT = os.environ.get('ADV_WCONT', '1') != '0'
 # GASES are unaffected -- SO2/H2SO4 inflow always uses the reservoir, since
 # tropospheric air genuinely is the SO2 source for the band.
 BC_BOT_AER = float(os.environ.get('BC_BOT_AER', '1.0'))
+# The same control for the TOP face, added 2026-08-13 for the advection-only
+# inter-model comparison (AER_SRC=fixed). It existed only for the bottom because
+# under the production 1-150 hPa band the 1 hPa top is already effectively
+# aerosol-free in MAM4 (3.2e-17 kg/kg, 7 orders below 13 hPa) so no knob was
+# needed -- see driver_fast.py's P_LO_HPA note. That argument does NOT hold for a
+# UNIFORM prescribed reservoir, where the top face would inject background aerosol
+# at full strength wherever air descends into the band, and a run meant to measure
+# DRAINAGE would instead measure drainage minus an unintended top-face source.
+#   BC_BOT_AER=0 BC_TOP_AER=0 => the aerosol can only LEAVE through either face.
+# Gases are unaffected by both (they always inflow at the reservoir value).
+BC_TOP_AER = float(os.environ.get('BC_TOP_AER', '1.0'))
 N_BC_TOP = int(os.environ.get('N_BC_TOP', '1'))  # top band levels pinned to hourly MAM4
 N_BC_BOT = int(os.environ.get('N_BC_BOT', '1'))  # bottom band levels pinned to hourly MAM4
 PROBE_HPA  = float(os.environ.get('PROBE_HPA', '50')) # level [hPa] for diagnostics/frames
 # ---- SAI sources & sinks (SO2 -> H2SO4 -> SO4 chain + settling) ----------
 # 'full' = so2_chemistry + nucleation + coagulation + condensation per cell;
 # 'coag' = legacy coagulation-only path (bit-identical to the pre-SAI model)
-MICRO_MODE = os.environ.get('MICRO', 'full')
+# 'off'  = NO microphysics at all: every size bin is an independent passive
+#          tracer, moved only by advection and settling. Added 2026-08-13 for the
+#          advection-only inter-model comparison. This is not the same as 'coag'
+#          with a long timestep -- coag still merges bins, which couples them and
+#          destroys the one property the comparison rests on (40 tracers whose
+#          only difference is their fall speed).
+MICRO_MODE = os.environ.get('MICRO', 'full').lower()
+# Reject an unknown mode instead of silently taking the coag branch. Until this
+# check existed, MICRO=none / MICRO=OFF / a typo all ran coagulation-only and the
+# run header dutifully echoed the typo back, so the log looked self-describing
+# while describing a model that was not running.
+if MICRO_MODE not in ('full', 'coag', 'off'):
+    raise SystemExit(f"  ERROR: MICRO must be 'full', 'coag' or 'off', "
+                     f"got {MICRO_MODE!r}")
 # full-micro substeps per coupling step. One 6 h condensation/nucleation call
 # is too coarse right after an injection pulse (the growth solvers assume the
 # gas is quasi-constant over dt), so default to 1 h pieces at STEP_HOURS=6.
@@ -345,8 +369,18 @@ WET_OPTICS = os.environ.get('WET_OPTICS', '1') != '0'
 # APPEND-ONLY, same as INJ_CFG -- the check compares the common prefix, so adding a
 # field here does not lock out checkpoints written before it existed.
 PHYS_CFG = np.array([float(WET_SETTLING), float(WET_OPTICS), float(SETTLE_ENABLE),
-                     float(os.environ.get('ADV_VPOS', '1') != '0')])
-PHYS_CFG_KEYS = np.array(['WET_SETTLING', 'WET_OPTICS', 'SETTLE', 'ADV_VPOS'])
+                     float(os.environ.get('ADV_VPOS', '1') != '0'),
+                     # appended 2026-08-13. All three change what the model IS
+                     # between one segment of a run and the next, which is a seam
+                     # to warn about, not a reason to refuse: MICRO_OFF flips the
+                     # bins between interacting and independent, and the two
+                     # face-inflow scales flip the vertical boundaries between a
+                     # source and pure drains. Encoded as floats because PHYS_CFG
+                     # is one numeric array; BC_*_AER are genuinely continuous.
+                     float(MICRO_MODE == 'off'),
+                     BC_TOP_AER, BC_BOT_AER])
+PHYS_CFG_KEYS = np.array(['WET_SETTLING', 'WET_OPTICS', 'SETTLE', 'ADV_VPOS',
+                          'MICRO_OFF', 'BC_TOP_AER', 'BC_BOT_AER'])
 ALPHA_COND = float(os.environ.get('ALPHA_COND', '1.0'))  # H2SO4 accommodation coeff (SAI box-model value)
 # ---- diurnal OH from a solar-zenith-angle curve (Hanisco et al. 2001, Fig. 1) ----
 # DEFAULT ON. The SO2+OH chemistry uses OH(theta) read off the paper's figure
@@ -558,6 +592,84 @@ CARMA_RHO = float(os.environ.get('CARMA_RHO', '1923.0'))
 # nucleation/condensation split of injected sulfur for the first days of a run.
 # Kept only to reproduce runs made before 2026-07-26.
 CARMA_SUBBIN = os.environ.get('CARMA_SUBBIN', '1') != '0'
+
+# ---- AER_SRC=fixed: a PRESCRIBED, spatially uniform, time-invariant PSD ------
+# The third reservoir source, added 2026-08-13 for the advection-only inter-model
+# comparison: one particle size distribution, identical in every cell of the band
+# and constant in time, advected and settled with no microphysics and no
+# radiation. Its purpose is to make DRAINAGE OUT OF THE BAND the only thing that
+# happens, so that running the identical code against CESM and then UKESM winds
+# isolates inter-model spread in transport + sedimentation from everything else.
+#
+# WHY UNIFORM MIXING RATIO, not uniform concentration. A constant mixing-ratio
+# field is an exact steady state of the advection operator alone (flux form moves
+# rho*q; if q is constant it stays constant to roundoff for ANY wind field,
+# divergent or not). Two consequences, both wanted:
+#   * every departure from the initial field is attributable -- it is settling,
+#     the open faces, or scheme error, never "the winds stirred a gradient I put
+#     in myself";
+#   * with SETTLE=0 the run becomes a pure advection ACCURACY test: whatever
+#     structure appears is the scheme's own error, with no analytic solution
+#     needed to see it.
+# Uniform CONCENTRATION would instead put a ~100x vertical mixing-ratio gradient
+# across the band and the two effects would be inseparable.
+#
+# The bins are INDEPENDENT under MICRO=off, so one run resolves the whole
+# size-dependence of drainage at once: 40 passive tracers differing only in fall
+# speed. That is why the default PSD is broad rather than tuned.
+FIXED_PSD = os.environ.get('FIXED_PSD', 'lognormal').lower()
+# Total number mixing ratio summed over all bins [#/kg]. Absolute scale is
+# IRRELEVANT to the comparison -- with no microphysics the whole system is linear
+# in the aerosol, so every reported drained fraction is scale-free. 1e8 #/kg is
+# ~8 #/cm3 at 50 hPa / 210 K, i.e. a plausible stratospheric background, so the
+# printed concentrations are recognisable rather than arbitrary.
+FIXED_N = float(os.environ.get('FIXED_N', '1.0e8'))
+# Number-median DRY diameter [nm] and geometric width of the 'lognormal' shape.
+# Settling goes as D^2, so this is the single most important knob for how fast the
+# run drains; 200 nm / 1.6 is a mid-range stratospheric sulfate background.
+FIXED_DG_NM = float(os.environ.get('FIXED_DG_NM', '200.0'))
+FIXED_SIGMA = float(os.environ.get('FIXED_SIGMA', '1.6'))
+# Pressure window [hPa] the background is placed in, intersected with the band.
+# Default = the whole band. Narrowing it (e.g. FIXED_P_HI_HPA=30) starts the run
+# with a real vertical gradient for the winds to act on IMMEDIATELY, instead of
+# waiting for settling to create one -- a useful second experiment, because under
+# a uniform IC the winds only enter at second order in time (settling makes the
+# gradient, transport then redistributes it).
+FIXED_P_LO_HPA = float(os.environ.get('FIXED_P_LO_HPA', '0.0'))
+FIXED_P_HI_HPA = float(os.environ.get('FIXED_P_HI_HPA', '1e9'))
+
+# ---- the aerosol SOURCE joins the scenario stamp ------------------------------
+# APPENDED to INJ_CFG here, rather than written into the array literal above,
+# because AER_SRC and the FIXED_* knobs are defined below that literal and this
+# keeps each field beside the code that resolves it. The concatenation IS the
+# append-only rule the RESUME check relies on: a checkpoint written before this
+# line existed carries the shorter stamp, the prefix comparison stops there, and
+# it stays resumable.
+#
+# These belong in INJ_CFG (REFUSE on mismatch) and not in PHYS_CFG (warn),
+# for exactly the reason INJ_CFG's own comment gives: they describe what the
+# aerosol IS, so resuming across a change in them continues one experiment's
+# particles as if they were another's, and nothing downstream can tell. Concretely
+# it stops `RESUME=1` from carrying a fixed-PSD drain run forward under MAM4, or
+# from continuing a 200 nm background as a 400 nm one -- both of which would
+# otherwise produce a clean-looking drainage curve with a discontinuity in the
+# middle that no output file records.
+# Side benefit, and the reason the FIXED_* values are here rather than just the
+# source code: every output npz now states the PSD it was run with, so an
+# inter-model comparison's files are self-identifying independent of OUT_TAG.
+_AER_SRC_CODES = ('mam4', 'carma', 'fixed')
+_FIXED_PSD_CODES = ('lognormal', 'flat')
+INJ_CFG = np.concatenate([INJ_CFG, np.array([
+    float(_AER_SRC_CODES.index(AER_SRC) if AER_SRC in _AER_SRC_CODES else -1),
+    # the FIXED_* fields are only meaningful under AER_SRC=fixed; they are stamped
+    # unconditionally (a constant for every other source) so the array's LENGTH
+    # never depends on the run, which is what makes the prefix comparison valid.
+    float(_FIXED_PSD_CODES.index(FIXED_PSD)
+          if FIXED_PSD in _FIXED_PSD_CODES else -1),
+    FIXED_N, FIXED_DG_NM, FIXED_SIGMA, FIXED_P_LO_HPA, FIXED_P_HI_HPA])])
+INJ_CFG_KEYS = np.concatenate([INJ_CFG_KEYS, np.array([
+    'AER_SRC', 'FIXED_PSD', 'FIXED_N', 'FIXED_DG_NM', 'FIXED_SIGMA',
+    'FIXED_P_LO_HPA', 'FIXED_P_HI_HPA'])])
 
 # N_BINS overrides the tomas-jax default resolution (40) for this run only --
 # rebinds the local NBINS/XK names in this module; tomas_jax.core.config itself
@@ -894,6 +1006,56 @@ def build_carma_reservoir(levs):
                 num_c[k] += n_add;  mas_c[k] += m              # true mass in-bin
     ds.close()
     return num_c, mas_c
+
+
+def build_fixed_reservoir(plev_pa):
+    """Prescribed uniform PSD as a (NBINS, nlev) mixing-ratio profile (AER_SRC=fixed).
+
+    Returns num [#/kg] and mas [kg/kg] per (bin, level) -- constant in lat/lon, so
+    the horizontal axes are left to the caller to broadcast. Levels outside
+    [FIXED_P_LO_HPA, FIXED_P_HI_HPA] get exactly zero, which is what makes the
+    narrowed-window variant a clean two-region IC rather than a taper.
+
+    Shapes:
+      'lognormal' : FIXED_N distributed over the bins by a lognormal in
+                    ln(diameter) at FIXED_DG_NM / FIXED_SIGMA, using the same
+                    bin_mode_dgnum kernel the MAM4 path uses -- so the fixed
+                    source and the MAM4 source discretize a lognormal
+                    IDENTICALLY, and an AER_SRC=fixed vs AER_SRC=mam4 difference
+                    is never an artifact of two different binners. The PDF is
+                    renormalized over the 40 bins, so FIXED_N is conserved
+                    exactly whatever the width.
+      'flat'      : FIXED_N/NBINS in EVERY bin. Deliberately unphysical: it makes
+                    the run a 40-point sweep of drainage-vs-size at uniform
+                    statistical weight, so the small bins (which a lognormal
+                    leaves nearly empty, and which drain slowest) are resolved as
+                    well as the peak. Use this for the size-dependence curve and
+                    'lognormal' for a physically weighted bulk drain rate.
+
+    mas = num * MMID, i.e. each bin's particles sit at its geometric-mean mass --
+    the same (num, mas) convention as bin_mam4 and build_carma_reservoir, so the
+    two-moment pair is in-bounds by construction and the reservoir is a drop-in.
+    """
+    if FIXED_PSD == 'lognormal':
+        # bin_mode_dgnum takes flat (G,) arrays; G=1 here (one uniform cell)
+        nk = bin_mode_dgnum(np.array([FIXED_N], dtype=np.float64),
+                            np.array([FIXED_DG_NM * 1e-9], dtype=np.float64),
+                            FIXED_SIGMA)[:, 0]                       # (NBINS,)
+    elif FIXED_PSD == 'flat':
+        nk = np.full(NBINS, FIXED_N / NBINS, dtype=np.float64)
+    else:
+        raise SystemExit(f"  ERROR: FIXED_PSD must be 'lognormal' or 'flat', "
+                         f"got {FIXED_PSD!r}")
+    hpa = np.asarray(plev_pa, dtype=np.float64) / 100.0
+    inwin = ((hpa >= FIXED_P_LO_HPA) & (hpa <= FIXED_P_HI_HPA)).astype(np.float64)
+    if not inwin.any():
+        raise SystemExit(
+            f"  ERROR: FIXED_P_LO_HPA/FIXED_P_HI_HPA = "
+            f"{FIXED_P_LO_HPA:g}/{FIXED_P_HI_HPA:g} hPa selects NO level of the "
+            f"{hpa[0]:.1f}-{hpa[-1]:.1f} hPa band -- the run would start empty.")
+    num = nk[:, None] * inwin[None, :]                               # (NBINS,nlev)
+    mas = num * MMID[:, None]
+    return num, mas
 
 
 # =========================================================================
@@ -1489,12 +1651,50 @@ def main():
             if lat_idx is not None:
                 n = n[:, :, lat_idx]; m = m[:, :, lat_idx]
             return n, m
+    elif AER_SRC == 'fixed':
+        print(f"=== initializing size bins from a PRESCRIBED uniform PSD ===",
+              flush=True)
+        _num_f, _mas_f = build_fixed_reservoir(PLEV_PA)         # (NBINS,nlev)
+        _klev_pos = {lv: i for i, lv in enumerate(klevs)}
+        # Report the resolved distribution, not just the knobs that made it: the
+        # lognormal is a PDF sampled at the 40 bin diameters and renormalized, so
+        # the moments that come out are what the run actually integrates and a
+        # FIXED_DG_NM near either end of the grid does NOT give the requested
+        # median. Printing them keeps the log self-describing (CLAUDE.md).
+        _nz = _num_f[:, int(np.argmax(_num_f.sum(0) > 0))]
+        _dpn = float((_nz * DP_BIN).sum() / max(_nz.sum(), 1e-300))
+        _mz = _nz * MMID
+        _dpm = float((_mz * DP_BIN).sum() / max(_mz.sum(), 1e-300))
+        _nwin = int((_num_f.sum(0) > 0).sum())
+        print(f"  FIXED_PSD={FIXED_PSD}: N={FIXED_N:.3e} #/kg"
+              + (f", Dg={FIXED_DG_NM:g} nm, sigma={FIXED_SIGMA:g}"
+                 if FIXED_PSD == 'lognormal' else " spread flat over all bins")
+              + f" -> Dp(num) {_dpn:.1f} nm, Dp(massw) {_dpm:.1f} nm, "
+              f"M={float(_mz.sum()):.3e} kg/kg", flush=True)
+        print(f"  placed uniformly in lat/lon over {_nwin}/{nlev} levels "
+              f"({PLEV_PA[_num_f.sum(0) > 0][0]/100:.1f}-"
+              f"{PLEV_PA[_num_f.sum(0) > 0][-1]/100:.1f} hPa); "
+              f"{int((_nz > 0).sum())}/{NBINS} bins populated, time-invariant",
+              flush=True)
+        def aer_fill(t, levs, lat_idx=None):
+            pos = [_klev_pos[lv] for lv in levs]
+            nj = nlat if lat_idx is None else len(lat_idx)
+            shp = (NBINS, len(pos), nj, nlon)
+            # broadcast VIEWS, not copies: the reservoir is one (40,nlev) profile
+            # and every call site immediately does jnp.asarray(), which copies
+            # onto the device anyway. Materializing it would cost 85 MB per array
+            # to store one number per (bin,level) 55k times over. Read-only is a
+            # feature here -- an accidental write to the shared reservoir raises
+            # instead of silently corrupting every later step.
+            return (np.broadcast_to(_num_f[:, pos, None, None], shp),
+                    np.broadcast_to(_mas_f[:, pos, None, None], shp))
     elif AER_SRC == 'mam4':
         print("=== initializing size bins from MAM4 ===", flush=True)
         def aer_fill(t, levs, lat_idx=None):
             return bin_mam4(ds_mam, t, levs, lat_idx)
     else:
-        raise SystemExit(f"  ERROR: AER_SRC must be 'mam4' or 'carma', got {AER_SRC!r}")
+        raise SystemExit(f"  ERROR: AER_SRC must be 'mam4', 'carma' or 'fixed', "
+                         f"got {AER_SRC!r}")
     #bin aerosol onto TOMAS grid (source per AER_SRC)
     num, mas = aer_fill(0, klevs)
     num = jnp.asarray(num, dtype=jnp.float64)
@@ -1516,6 +1716,8 @@ def main():
     # refresh below only takes effect from the end of step 0 onward)
     if ADV_WCONT and BC_BOT_AER != 1.0:
         qfroz = qfroz.at[:2*NBINS, -N_BC_BOT:].multiply(BC_BOT_AER)
+    if ADV_WCONT and BC_TOP_AER != 1.0:
+        qfroz = qfroz.at[:2*NBINS, :N_BC_TOP].multiply(BC_TOP_AER)
     pol_idx = np.where(np.abs(lat) > LAT_FREEZE)[0]
 
     # open-BC slab levels (native indices into the h1 lev axis)
@@ -1751,7 +1953,42 @@ def main():
     print(f"  micro mode: {MICRO_MODE}"
           + (f" ({MICRO_SUBSTEPS} substeps/step, alpha={ALPHA_COND})"
              if MICRO_MODE == 'full' else '')
+          + (" (bins are INDEPENDENT passive tracers)"
+             if MICRO_MODE == 'off' else '')
           + f", settling {'ON' if SETTLE_ENABLE else 'OFF'}", flush=True)
+    # Spell out the transport-only configuration when it is in force, and -- more
+    # useful -- say so when it is ALMOST in force. AER_SRC=fixed with radiation or
+    # microphysics still on is a legitimate thing to run, but it is not the
+    # advection-comparison experiment, and the difference is invisible in the
+    # output files: same shapes, same tags, same plots.
+    if AER_SRC == 'fixed' or MICRO_MODE == 'off':
+        _leak = ([] if MICRO_MODE == 'off' else [f'MICRO={MICRO_MODE}'])
+        _leak += ([] if not RAD_ENABLE else ['RAD=1'])
+        _leak += ([] if AER_SRC == 'fixed' else [f'AER_SRC={AER_SRC}'])
+        _leak += ([] if INJ_SO2_TG_YR == 0 and INJ_H2SO4_TG_YR == 0
+                  else ['INJ_* nonzero'])
+        _src = ('aerosol-FREE' if BC_TOP_AER == 0 else f'{BC_TOP_AER:g}x reservoir')
+        _srb = ('aerosol-FREE' if BC_BOT_AER == 0 else f'{BC_BOT_AER:g}x reservoir')
+        print(f"  face inflow: top {_src}, bottom {_srb} "
+              f"(BC_TOP_AER={BC_TOP_AER:g}, BC_BOT_AER={BC_BOT_AER:g}); "
+              f"outflow always free", flush=True)
+        if not _leak:
+            print("  ==> TRANSPORT-ONLY run: advection + settling of a prescribed "
+                  "fixed PSD, nothing else.\n"
+                  "      Every change in the burden is drainage out of the band or "
+                  "scheme error.", flush=True)
+        else:
+            print(f"  NOTE: this is NOT a pure transport-only run -- still active: "
+                  f"{', '.join(_leak)}.\n"
+                  f"      For the advection-only inter-model comparison use "
+                  f"AER_SRC=fixed MICRO=off RAD=0 INJ_SO2_TG_YR=0.", flush=True)
+        if BC_TOP_AER != 0 or BC_BOT_AER != 0:
+            print("  NOTE: a face still serves the reservoir on INFLOW, so the "
+                  "band has an aerosol SOURCE.\n"
+                  "      The burden then relaxes toward a steady state instead of "
+                  "draining to zero; set\n"
+                  "      BC_TOP_AER=0 BC_BOT_AER=0 for a drain-only run.",
+                  flush=True)
     if MICRO_MODE == 'full':
         print(f"  OH source: "
               + (f"SZA curve (Hanisco 2001, parabola in cos(SZA) fitted to "
@@ -1772,6 +2009,17 @@ def main():
                           'SO2burden', 'H2SO4burden', 'injSO2_cum', 'settleM_cum',
                           'dT_min', 'dT_max', 'dT_rms', 'arf_toa', 'arf_toa_avg',
                           'aod550')}
+    # The resolved drain history (see the `drain` init below). Unlike every key
+    # above, each record is a VECTOR -- (nlat,) or (NBINS,) -- so the saved arrays
+    # come out (nsteps, nlat) / (nsteps, NBINS). _TS_VEC records the per-record
+    # shape, which the RESUME padding below needs: a key added since a checkpoint
+    # was written gets NaN-padded to the existing record count, and padding a
+    # vector key with scalar NaNs would make np.array() of the mixed list raise on
+    # the inhomogeneous shape at the first save after the resume.
+    _TS_VEC = {'D_' + k: ((nlat,) if k.endswith('_lat') else (NBINS,))
+               for k in ('setN_lat', 'setM_lat', 'setN_bin', 'setM_bin',
+                         'vfN_lat', 'vfM_lat', 'vfN_bin', 'vfM_bin')}
+    ts.update({k: [] for k in _TS_VEC})
     # trailing window of instantaneous ARF samples -> diurnal mean (see ARF_AVG_H)
     _arf_win = max(1, int(round(ARF_AVG_H / (STEP_HOURS * RAD_EVERY)))) \
         if ARF_AVG_H > 0 else 1
@@ -1788,6 +2036,36 @@ def main():
     inj_cum = 0.0      # cumulative injected SO2 (burden units, gas budget)
     inj_h2so4_cum = 0.0  # cumulative ad-hoc injected H2SO4 gas (burden units)
     settle_cum = 0.0   # cumulative aerosol mass settled out the bottom (burden units)
+    # ---- resolved drain accounting: where the aerosol leaves, by latitude and size --
+    # Added 2026-08-13 for the advection-only inter-model comparison, where the RATE
+    # AND THE PATTERN of drainage out of the band IS the result, not a diagnostic of
+    # one. settle_cum/cumV already carry the globally-summed versions of exactly
+    # these two channels; these are the same numbers left un-summed, so
+    #     drain['setM_lat'].sum() == settle_cum          (settling)
+    #     drain['vfM_lat'].sum()  == -cumV['out'] * M0   (advection, sign-flipped)
+    # to roundoff at every step -- a standing cross-check on the reduction, in the
+    # spirit of the budget closure line.
+    # TWO CHANNELS, kept apart on purpose. They are different physics and they
+    # answer different questions:
+    #   set* : GRAVITATIONAL SETTLING through the band bottom. Depends on the
+    #          model's T (and RH, via the wet size) and on nothing else, so it is
+    #          the channel that should be nearly model-INDEPENDENT. Deviations
+    #          here are thermodynamic, not dynamical.
+    #   vf*  : ADVECTIVE transport through the same face. This is the residual
+    #          circulation -- descent at high latitudes -- and it is where CESM and
+    #          UKESM are expected to actually disagree.
+    # Resolved by LATITUDE (nlat,) and, independently, by SIZE BIN (NBINS,). Under
+    # MICRO=off the bins never interact, so the per-bin split is a genuine
+    # drainage-vs-size curve from a single run rather than a decomposition needing
+    # 40 runs to produce.
+    # Burden units throughout (the W_LAT area metric, no dp -- the fluxes are
+    # already q*Pa), so they are directly comparable to M0/N0.
+    drain = {k: np.zeros(nlat if k.endswith('_lat') else NBINS)
+             for k in ('setN_lat', 'setM_lat', 'setN_bin', 'setM_bin',
+                       'vfN_lat', 'vfM_lat', 'vfN_bin', 'vfM_bin')}
+    # W_LAT broadcast to (nlat,1) once: it is applied to a (bin,lat,lon) array
+    # eight times per step and re-broadcasting inside the loop is pure noise.
+    _WLC = W_LAT[:, None]
     aod_gm = float('nan')                    # last radiation-step global AOD550
     # staged mass-budget attribution, cumulative and normalized by M0. Each hour
     # the change in total M burden is split by measuring M at checkpoints:
@@ -1808,7 +2086,12 @@ def main():
     frames_num = []; frames_mas = []; frames_dT = []; frame_hours = []
     frames_so2 = []; frames_h2so4 = []
     KPROBE = int(np.argmin(np.abs(PLEV_PA / 100 - PROBE_HPA)))   # diagnostic probe level
-    _res = 'per-step MAM4' if AER_SRC == 'mam4' else 'static CARMA'
+    # Names the reservoir the boundary is actually served from. This was a
+    # two-way 'per-step MAM4' / 'static CARMA' choice, so AER_SRC=fixed printed
+    # "static CARMA reservoir" -- a run header claiming a source the run never
+    # opened, in the one line the log is supposed to be self-describing by.
+    _res = {'mam4': 'per-step MAM4', 'carma': 'static CARMA',
+            'fixed': 'prescribed fixed-PSD'}.get(AER_SRC, AER_SRC)
     _edge = _bc_edge0
     # The gases are ALWAYS read from the CESM SO2/H2SO4 h1 fields (read_gases),
     # never from the AER_SRC reservoir -- _res describes the AEROSOL source only.
@@ -1911,7 +2194,11 @@ def main():
                 print("  WARNING: this RESUME changes the PHYSICS mid-run. "
                       f"{_state_f} was written with:", flush=True)
                 for _k, _a, _b in _pdiff:
-                    print(f"      {_k}: ckpt {int(_a)} -> now {int(_b)}", flush=True)
+                    # :g, not int(): PHYS_CFG was all-boolean when this was
+                    # written, but BC_TOP_AER/BC_BOT_AER are continuous, so int()
+                    # would report a 0.5 -> 0.0 change as "0 -> 0" -- a warning
+                    # that says nothing changed while warning that it did.
+                    print(f"      {_k}: ckpt {_a:g} -> now {_b:g}", flush=True)
                 print("    The state itself is valid and the run will continue "
                       "normally -- but the trajectory\n"
                       "    has a SEAM at this step, and any timeseries spanning it "
@@ -1936,6 +2223,18 @@ def main():
         settle_cum = float(_ck['settle_cum']); aod_gm = float(_ck['aod_gm'])
         cumB = {k: float(v) for k, v in zip(_ck['cumB_keys'], _ck['cumB_vals'])}
         cumV = {k: float(v) for k, v in zip(_ck['cumV_keys'], _ck['cumV_vals'])}
+        # Resolved drain counters, one npz key each ('drain_setM_lat', ...) rather
+        # than a stacked array, because the two families have different lengths
+        # (nlat vs NBINS) and could not be stacked. Restored key by key and only
+        # if present, so a checkpoint written before these existed resumes with
+        # them at zero instead of being locked out -- the append-only rule. The
+        # consequence is stated rather than hidden: a run resumed across this
+        # change has drain totals covering the RESUMED SEGMENT ONLY, while
+        # settle_cum (restored above, and always present) still covers the whole
+        # run, so the two will not agree until the next fresh run.
+        for _dk in drain:
+            if 'drain_' + _dk in _ck.files:
+                drain[_dk] = np.array(_ck['drain_' + _dk], dtype=np.float64)
         arf_hist = collections.deque(
             [float(x) for x in _ck['arf_hist']], maxlen=_arf_win)
         # frames + timeseries are written in the same block as the state, but NOT
@@ -1990,7 +2289,15 @@ def main():
             # exist as a list, NaN-padded to the same length, or the first append
             # would desynchronize it from 'hours' and corrupt every later plot.
             _nrec = len(_tk['hours'])
-            ts = {k: (list(_tk[k]) if k in _tk.files else [float('nan')] * _nrec)
+            # The pad value is SHAPE-AWARE: _TS_VEC keys hold one vector per
+            # record, so they pad with a NaN vector of that shape. Padding them
+            # with a scalar NaN instead would build a ragged list that np.array()
+            # rejects at the next checkpoint write -- i.e. adding a vector
+            # diagnostic would silently make every older checkpoint unresumable,
+            # which is exactly what the append-only rule forbids.
+            ts = {k: (list(_tk[k]) if k in _tk.files
+                      else [(np.full(_TS_VEC[k], np.nan) if k in _TS_VEC
+                             else float('nan'))] * _nrec)
                   for k in ts}
         except Exception as _e:
             print(f"  WARNING: timeseries ckpt {_tf} is unreadable "
@@ -2155,6 +2462,21 @@ def main():
         if vfl is not None:
             vf_in = float((vfl[NBINS:2*NBINS, 0] * AF_j).sum())
             vf_out = float((vfl[NBINS:2*NBINS, 1] * AF_j).sum())
+            # ---- resolved drain accounting through the BOTTOM face ------------
+            # The advective half of the drain, resolved the same two ways as the
+            # settling half (see the `drain` init). Sign convention is fct_lr's
+            # f_bot: POSITIVE = out of the slab, so these accumulate as losses
+            # WITHOUT the sign flip cumV['out'] applies -- both drain dicts count
+            # aerosol leaving the base as a positive number.
+            # Caveat inherited from vf_out above, and it matters more here: each
+            # entry is a NET flux, summed over longitude and over every substep,
+            # so an inflowing column cancels an outflowing one within the same
+            # latitude row. This is net drainage per latitude, not gross outflow.
+            _vn = np.asarray(vfl[:NBINS, 1]); _vm = np.asarray(vfl[NBINS:2*NBINS, 1])
+            drain['vfN_lat'] += (_vn.sum(0) * _WLC).sum(1)
+            drain['vfM_lat'] += (_vm.sum(0) * _WLC).sum(1)
+            drain['vfN_bin'] += (_vn * _WLC[None]).sum((1, 2))
+            drain['vfM_bin'] += (_vm * _WLC[None]).sum((1, 2))
         else:
             vf_in = vf_out = 0.0
         num = qb[:NBINS]; mas = qb[NBINS:2*NBINS]
@@ -2190,12 +2512,28 @@ def main():
         tm = time.time()
         #accumulated temperature
         T3d = temp(it0) + np.asarray(dT_rad)
+        # RELHUM is read HERE, not inside the MICRO=full branch where it used to
+        # live, because three independent consumers need it and only one of them
+        # is the full chain: WET_SETTLING sizes the falling droplet from it and
+        # WET_OPTICS sizes the probe-level diagnostics from it. With both of those
+        # ON by default (2026-08-03), `MICRO=coag` or `MICRO=off` hit a NameError
+        # at the settling call -- a latent crash that only the default MICRO=full
+        # was hiding. None of the three is a reason to pay for the read when none
+        # of them is active, hence the guard rather than an unconditional read.
+        rh3d = (relhum(it0) if (MICRO_MODE == 'full' or WET_SETTLING or WET_OPTICS)
+                else None)
         #run microphysics on the updated temperature...clip_add and clip_rem over the mass created/destroyed (not truly mass conserving)
-        if MICRO_MODE == 'full':
+        if MICRO_MODE == 'off':
+            # pure passive tracers: nothing between advection and settling, so
+            # there is no clip and no host round-trip. num/mas stay on the device
+            # exactly as advection left them -- do NOT fall through to the
+            # jnp.asarray(num_np) below, which would cost two 42 MB device->host
+            # ->device copies per step to change nothing.
+            clip_add = 0.0; clip_rem = 0.0
+        elif MICRO_MODE == 'full':
             # full chain: SO2+OH consumes so2 -> h2so4; nucleation and
             # condensation move h2so4 into the bins, so aerosol M genuinely
             # grows here (the 'micro' budget stage is now a real source)
-            rh3d = relhum(it0)
             # OH: SZA-parabola diurnal (per substep) or CESM's field (constant
             # over the step). run_microphysics_full accepts either shape.
             oh3d = oh_sza(it0) if OH_SZA else oh_molec(it0, T3d)
@@ -2227,7 +2565,8 @@ def main():
         else:
             num_np, mas_np, clip_add, clip_rem = run_microphysics(num, mas, T3d,
                                                                   pres3d, A)
-        num = jnp.asarray(num_np); mas = jnp.asarray(mas_np)
+        if MICRO_MODE != 'off':
+            num = jnp.asarray(num_np); mas = jnp.asarray(mas_np)
         clip_add_cum += clip_add; clip_rem_cum += clip_rem
         #Burden after coagulation (mass change due to coagulation and two-moment clip)
         M_mic = Mbur(mas)                          # coag + two-moment clip (+cond/nuc growth in MICRO=full)
@@ -2264,6 +2603,17 @@ def main():
             settle_out = float((out_m.sum(0)
                                 * jnp.asarray(W_LAT)[:, None]).sum())
             settle_cum += settle_out
+            # ---- resolved drain accounting (see the `drain` init) ------------
+            # Same q*dp -> burden conversion as settle_out above, but reduced over
+            # only TWO of the three axes each time, so the cumulative loss is kept
+            # as a function of latitude and, separately, of size bin. Cheap: two
+            # (40,192,288) host transfers per step, and settle_step's output was
+            # already being pulled to host for settle_out.
+            _dn = np.asarray(out_n); _dm = np.asarray(out_m)   # (NBINS,nlat,nlon)
+            drain['setN_lat'] += (_dn.sum(0) * _WLC).sum(1)
+            drain['setM_lat'] += (_dm.sum(0) * _WLC).sum(1)
+            drain['setN_bin'] += (_dn * _WLC[None]).sum((1, 2))
+            drain['setM_bin'] += (_dm * _WLC[None]).sum((1, 2))
             num.block_until_ready()                # honest timing (settle_step is lazy)
         M_set = Mbur(mas)                          # after settling (== M_mic if off)
         t_settle = time.time() - ts_set
@@ -2271,7 +2621,10 @@ def main():
             print(f"  [prof] s={s} read={t_read:.2f}s advect={t_adv:.2f}s "
                   f"micro={t_mic:.2f}s settle={t_settle:.2f}s (nsub={nsub})", flush=True)
 
-        if os.environ.get('DEBUG') and s == 0:
+        # MICRO_MODE guard: num_np/mas_np only exist when a micro engine ran. This
+        # check is on the run_prod.sh path (DEBUG=1), so without the guard MICRO=off
+        # is a NameError on step 0 of every production-launched run.
+        if os.environ.get('DEBUG') and s == 0 and MICRO_MODE != 'off':
             fn = np.isfinite(num_np).all(axis=(1,2,3)); fm = np.isfinite(mas_np).all(axis=(1,2,3))
             print(f"  [dbg] after MICRO : num finite {fn.all()} (bad bins {np.where(~fn)[0]}), "
                   f"mas finite {fm.all()} (bad bins {np.where(~fm)[0]})", flush=True)
@@ -2358,8 +2711,8 @@ def main():
         # scaling on the bottom face at high latitudes.
         if ADV_WCONT:
             num_r, mas_r = aer_fill(it1, lev_top)
-            qfroz = qfroz.at[:NBINS, :N_BC_TOP].set(jnp.asarray(num_r))
-            qfroz = qfroz.at[NBINS:2*NBINS, :N_BC_TOP].set(jnp.asarray(mas_r))
+            qfroz = qfroz.at[:NBINS, :N_BC_TOP].set(jnp.asarray(num_r) * BC_TOP_AER)
+            qfroz = qfroz.at[NBINS:2*NBINS, :N_BC_TOP].set(jnp.asarray(mas_r) * BC_TOP_AER)
             num_r, mas_r = aer_fill(it1, lev_bot)
             qfroz = qfroz.at[:NBINS, -N_BC_BOT:].set(jnp.asarray(num_r) * BC_BOT_AER)
             qfroz = qfroz.at[NBINS:2*NBINS, -N_BC_BOT:].set(jnp.asarray(mas_r) * BC_BOT_AER)
@@ -2543,6 +2896,10 @@ def main():
             ts['H2SO4burden'].append(gas_burden(h2so4))
             ts['injSO2_cum'].append(inj_cum)
             ts['settleM_cum'].append(settle_cum)
+            # .copy(): `drain` is mutated in place every step, so appending the
+            # dict's own arrays would make the whole history alias one record.
+            for _dk, _dv in drain.items():
+                ts['D_' + _dk].append(_dv.copy())
             dT_np = np.asarray(dT_rad)
             ts['dT_min'].append(float(dT_np.min()))
             ts['dT_max'].append(float(dT_np.max()))
@@ -2595,6 +2952,25 @@ def main():
                       f"top {cumV['in']:+.2e}  "
                       f"bot {cumV['out']:+.2e}  net {_vnet:+.2e}  ==> "
                       f"advection numerical residual {_resid:+.2e}", flush=True)
+            # ---- drain ledger: the advection-comparison result line -------------
+            # Printed whenever there is a resolved drain to report, i.e. whenever
+            # either channel is active. Reports the two channels separately (they
+            # are different physics -- see the `drain` init), each as a fraction of
+            # M0/N0, plus WHERE the mass left: the drained mass poleward of
+            # +-|lat|=60 as a share of the total, which is the single number the
+            # "drains out of the base at high latitudes" expectation predicts.
+            if SETTLE_ENABLE or ADV_VFLUX:
+                _dsM = drain['setM_lat'].sum(); _dvM = drain['vfM_lat'].sum()
+                _dsN = drain['setN_lat'].sum(); _dvN = drain['vfN_lat'].sum()
+                _hi = np.abs(lat) > 60.0
+                _totM = _dsM + _dvM
+                _fpol = (drain['setM_lat'][_hi].sum()
+                         + drain['vfM_lat'][_hi].sum()) / _totM if _totM != 0 else float('nan')
+                print(f"           drain/M0: settle {_dsM/M0:+.3e}  "
+                      f"vface_bot {_dvM/M0:+.3e}  total {_totM/M0:+.3e}  "
+                      f"(|lat|>60 share {_fpol:+.3f})  |  "
+                      f"drain/N0: settle {_dsN/N0:+.3e}  "
+                      f"vface_bot {_dvN/N0:+.3e}", flush=True)
             if MICRO_MODE == 'full' or inj_dq is not None:
                 # gas ledger: burdens are in the same Pa*cos(lat) units as M,
                 # so SO2/S0 tracks depletion vs the CESM background start
@@ -2652,7 +3028,8 @@ def main():
                          cumV_vals=np.array(list(cumV.values())),
                          arf_hist=np.array(list(arf_hist)),
                          inj_cfg=INJ_CFG, phys_cfg=PHYS_CFG,
-                         phys_cfg_keys=PHYS_CFG_KEYS)
+                         phys_cfg_keys=PHYS_CFG_KEYS,
+                         **{'drain_' + k: v for k, v in drain.items()})
 
     print(f"\n{'='*60}\nComplete in {time.time()-t0:.0f}s\n{'='*60}", flush=True)
 

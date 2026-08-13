@@ -191,6 +191,59 @@ fi
 #   OUT_TAG=inj5_eq_pt INJ_SO2_TG_YR=5 INJ_ZONAL=0 INJ_LON=120 GPU=0 $REPO/run_prod.sh
 # The resolved geometry is echoed in the run header ("SAI injection: ... at ...").
 # ============================================================================
+# DOMAIN -- the production band, 1-150 hPa (24 levels), set HERE as of 2026-08-13
+# ============================================================================
+# These two were previously set only by driver_fast.py's own os.environ.setdefault,
+# i.e. the production domain was a property of ONE ENTRY POINT rather than of the
+# production environment. That was invisible until this launcher gained DRIVER:
+# `DRIVER=coupling.py` silently got coupling.py's module defaults instead (1-100
+# hPa, 21 levels), so two runs launched by the same script with the same knobs
+# integrated DIFFERENT ATMOSPHERES -- and since where the floor sits governs where
+# aerosol drains out, that is the last thing an inter-model drainage comparison
+# can afford to have drift between drivers.
+# Values are byte-identical to driver_fast.py's, whose comment block holds the
+# rationale for each edge (1 hPa top = effectively aerosol-free inflow;
+# 150 hPa bottom = right LATITUDE structure at the base, unlike the old 100 hPa).
+# Its setdefault calls are now no-ops under this launcher and remain the fallback
+# for invoking driver_fast.py directly.
+# ============================================================================
+# DRIVER -- which entry point this launcher execs (default driver_fast.py)
+# ============================================================================
+# One launcher, not two. Everything below this line -- the GPU pin, the libcuda
+# path, the memory policy, the repo-as-$PWD guard -- is the production
+# ENVIRONMENT, and it is identical whichever engine runs inside it. Copying this
+# file to get a second entry point would fork all of that, and the copy would
+# drift; adding a second launcher script is also exactly the debt CLAUDE.md says
+# to stop accruing.
+#
+#   DRIVER=driver_fast.py  (default)  the batched tomas_jax.fast micro engine.
+#                                     Requires MICRO=full -- it exits otherwise.
+#   DRIVER=coupling.py                the standalone path: same advection, same
+#                                     settling, same radiation, per-cell micro.
+#                                     This is the one to use for MICRO=off, since
+#                                     driver_fast.py's whole job is a micro engine
+#                                     that MICRO=off does not call.
+#
+# ADVECTION-ONLY INTER-MODEL COMPARISON (2026-08-13). Pure transport + settling of
+# a prescribed uniform PSD -- no microphysics, no radiation, no injection -- so
+# that re-running the identical code against another model's winds isolates
+# inter-model spread in transport. The band drains and nothing refills it:
+#
+#   cd <runs dir>
+#   DRIVER=coupling.py MICRO=off RAD=0 AER_SRC=fixed \
+#     BC_TOP_AER=0 BC_BOT_AER=0 \
+#     OUT_TAG=mip_cesm $REPO/run_prod.sh
+#
+# The band is the production 1-150 hPa either way (see the DOMAIN block above) and
+# N_HOURS defaults to 2160 = 90 days, so neither needs restating. ~5 s/step without
+# microphysics or radiation, so a 90-day run is ~30 min rather than ~33 h.
+#
+# The run header echoes "TRANSPORT-ONLY run" only when all of that is actually in
+# force, and names whatever is still active otherwise. Add FIXED_PSD=flat for the
+# drainage-vs-size curve (equal number in all 40 bins, which under MICRO=off are
+# independent tracers), or FIXED_P_HI_HPA=30 to start with a vertical gradient the
+# winds act on immediately rather than one settling has to create first.
+# ============================================================================
 # ENVIRONMENT -- inlined 2026-08-04
 # ============================================================================
 # This block used to be `PYTHONPATH=<absolute paths> ../<launcher outside the repo>`:
@@ -231,6 +284,8 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
 echo "run_prod.sh: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES  preallocate=$XLA_PYTHON_CLIENT_PREALLOCATE" >&2
 
 N_HOURS=${N_HOURS:-2160} \
+P_LO_HPA=${P_LO_HPA:-1.0} \
+P_HI_HPA=${P_HI_HPA:-150.0} \
 INJ_SO2_TG_YR=${INJ_SO2_TG_YR:-0.0} \
 INJ_HPA=${INJ_HPA:-55.0} \
 INJ_LAT=${INJ_LAT:-0.0} \
@@ -246,4 +301,4 @@ ADV_VPOS=1 \
 DEBUG=1 PROFILE=1 \
 OUT_TAG=${OUT_TAG:-prod90d} \
 RESUME=${RESUME:-0} \
-    exec python3 "$HERE/driver_fast.py"
+    exec python3 "$HERE/${DRIVER:-driver_fast.py}"
