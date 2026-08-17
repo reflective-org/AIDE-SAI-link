@@ -16,7 +16,7 @@ Where that seam already exists, it is deliberate and worth preserving:
 
 | slot | how it is already swappable | how far |
 |---|---|---|
-| aerosol IC/BC source | `AER_SRC=mam4\|carma` | real, both paths run |
+| aerosol IC/BC source | `AER_SRC=mam4\|carma\|fixed` | real, all three paths run. `fixed` is a prescribed uniform PSD with no CESM aerosol at all — the advection-only comparison |
 | microphysics engine | `driver_fast.py` monkeypatches `tomas_jax.fast` into `coupling.py` at import instead of branching inside it | real, and why the driver is a separate file |
 | radiation | `RAD=0` drops it and the `jax-rrtmgp` dependency entirely | on/off only |
 | meteorology | none — the reader expects the CESM `h1` layout and variable names | a new source is work, not configuration |
@@ -46,8 +46,15 @@ fast_advection/fct_lr.py    Lin-Rood flux-form advection (the production scheme)
 fast_advection/fct_fast.py  PPM/Zalesak primitives that fct_lr imports
 rad_data/                   palmer_williams_h2so4.dat (HITRAN Aerosols-2016)
 run_prod.sh                 the production launcher (self-documenting header)
-plot_run.py                 the three post-run figures (dashboard, filmstrip, size dist)
-gif_run.py                  animated versions of the filmstrip panels
+plot_run.py                 the post-run figures (dashboard, filmstrip, size dist,
+                            zonal-mean cross-section, drainage -- the last is the
+                            advection-only comparison's figure)
+gif_run.py                  animated versions of the filmstrip and cross-section panels
+run_pulse_bdc.sh            launcher for the tagged-pulse Brewer-Dobson experiment
+pulse_progress_abs.py       tagged-pulse figure: one lat-pressure panel per year on one
+                            shared absolute scale -- the decay
+pulse_deep_branch.py        tagged-pulse figure: the ascent/descent Hovmoller, tropics and
+                            both polar caps. --log for the log-colour variant
 docs/                       CONFIGURATION (every env var), VALIDATION (the harnesses),
                             PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
 validation/                 harnesses -- see below
@@ -72,6 +79,12 @@ pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusa
 mkdir -p runs && cd runs                                     # outputs go OUTSIDE the repo
 N_HOURS=6 OUT_TAG=smoke ../aide_sai_core/run_prod.sh         # smoke test first
 ```
+
+For the **advection-only** experiment, skip the `jax-rrtmgp` clone and its patch
+entirely (`RAD=0` drops that dependency) and make the smoke test the transport-only
+one — `../README.md` on the `advection-mip` branch has the exact command.
+`tomas-jax` on `gpu-fast` is still required even at `MICRO=off`: `coupling.py`
+imports it at module scope for the bin grid.
 
 **Neither sibling repo is usable as a plain clone of its default branch**, and
 both failures are at import or in the first radiation call, not subtle:
@@ -147,6 +160,140 @@ state ckpt, not from there.
 
 The full effective config is printed in the run's own header, so any log is
 self-describing.
+
+### The advection-only inter-model comparison
+
+The experiment the `advection-mip` branch exists for, and what `../README.md` on
+that branch documents end to end. Transport (and, optionally, settling) of a
+**prescribed uniform PSD** with no microphysics, no radiation and no injection, so
+that re-running the identical code against another model's winds isolates
+inter-model spread in transport. Both faces are aerosol-free, so the band drains
+and nothing refills it.
+
+```bash
+cd <runs dir>
+DRIVER=coupling.py MICRO=off RAD=0 AER_SRC=fixed \
+  BC_TOP_AER=0 BC_BOT_AER=0 P_LO_HPA=0.03 P_HI_HPA=150 \
+  N_HOURS=2160 FRAME_EVERY=24 OUT_TAG=mip_settle $REPO/run_prod.sh
+#   ... SETTLE=0 ...            OUT_TAG=mip_nosettle   pure advection / age of air
+#   ... SETTLE=0 N_BINS=1 ...   OUT_TAG=mip_2yr        multi-year, FRAME_EVERY=120
+python3 $REPO/plot_run.py mip_settle        # -> mip_settle_drain.png, the figure
+```
+
+`DRIVER=coupling.py` is required: `driver_fast.py` exists only to swap in the
+batched microphysics engine and **exits at `MICRO=off`**. Both entry points share
+the advection and settling code, so the two agree where both can run.
+
+**Why each setting is what it is.**
+
+* **Uniform mixing ratio, not uniform concentration.** A constant q is an exact
+  steady state of flux-form advection alone (it moves ρ·q, so constant q stays
+  constant to roundoff for any wind field, divergent or not). Every departure is
+  then attributable — settling, the open faces, or scheme error — and at
+  `SETTLE=0` the run is a pure advection ACCURACY test with no analytic solution
+  needed. Uniform concentration would impose a ~100× vertical mixing-ratio
+  gradient across the band and the two effects would be inseparable.
+* **`FIXED_PSD=lognormal`, `FIXED_N=1e8` #/kg, `FIXED_DG_NM=200`,
+  `FIXED_SIGMA=1.6`.** The absolute scale is irrelevant — with no microphysics
+  the system is linear in the aerosol, so every drained fraction is scale-free;
+  1e8 #/kg is ~8 #/cm³ at 50 hPa/210 K so the printed concentrations are
+  recognisable. `FIXED_DG_NM` is the load-bearing knob (settling ∝ D²), and the
+  distribution is deliberately broad rather than tuned, because under `MICRO=off`
+  the 40 bins are INDEPENDENT passive tracers differing only in fall speed: one
+  run resolves the whole size-dependence of drainage, with the small bins acting
+  as an age-of-air tracer and the large bins settling-dominated.
+* **`P_LO_HPA=0.03` (33 levels) — the lid was the contaminant at 1 hPa.** There,
+  6.9% of the domain's air descends through the top face per 90 days carrying
+  q = 0 under `BC_TOP_AER=0`, which **dilutes without appearing in the
+  `vface_top` mass term at all** — that term counts only aerosol *leaving*. At
+  0.03 hPa it is ~0.8%, so the domain drains through its base and `BC_TOP_AER=1`
+  (which would stop it draining at all) is not needed. Tropical zonal-mean ascent
+  turns poleward at ~2.1 hPa in this forcing, so the old 1 hPa lid was already
+  above the branch; the forcing is 70-level to 4.5e-6 hPa, so the lid is a free
+  choice. Cost of the taller domain: nsub ~270 vs ~170, ~12 s/step vs ~5 s/step.
+* **`P_HI_HPA=150` → a floor at 143 hPa**, 1–3 km above the real extratropical
+  tropopause, so tracer leaves somewhat early: a measured decay rate is a LOWER
+  bound on the true stratospheric lifetime, and the honest wording is "left the
+  143 hPa domain", not "removed". Stated explicitly on the command line even
+  though it is the launcher default, because where the faces sit governs the
+  whole result.
+* **`SETTLE=1` (default) vs `SETTLE=0`.** On: the drainage experiment, and the
+  settling/advective split is the point — settling depends on the model's own T
+  and nothing else and should be nearly model-independent, while the advective
+  flux through the same face IS the residual circulation and is where two dycores
+  are expected to disagree. `plot_run.py` therefore never merges the two channels
+  into one curve. Off: the tracer is passive and the IC is an exact steady state.
+* **`N_BINS=1` only with `SETTLE=0`.** With no fall speed and no microphysics the
+  bins are identical, so 40 of them is 40 copies of one answer; with `SETTLE=1` it
+  collapses the fall-speed spectrum the drainage run measures. Side effect: one
+  bin spanning the whole mass grid leaves no bin-bound tying num to mas, so
+  `Dp(M/N)` in the log is meaningless — read `frames_zm_mas`, ignore the number
+  moment.
+* **`FRAME_EVERY`** is overridable as of 2026-08-14 and must be raised beyond
+  ~90 days: the whole frames history is REWRITTEN at every frame, so I/O cost
+  grows as (frames)². 24 h for 90 days; 120 h (5-day) for multi-year.
+
+**Measured, and worth knowing before designing a run.** On the 90-day `mip_cesm`
+run (at the old 1 hPa lid): 46.8% of the mass left the band, but the fraction of
+ORIGINAL air remaining at day 90 is 0.99–1.00 through 8.6–43 hPa — the
+stratosphere's interior is untouched, and that mass loss is almost entirely the
+100–143 hPa layer exchanging with the troposphere, since that is where the air
+mass is. **90 days shows nothing of the Brewer-Dobson drainage; it needs years.**
+
+**Do not read tracer descent off Eulerian zonal-mean omega** — in the winter
+polar stratosphere it has the opposite sign to the residual circulation that
+actually moves tracer.
+
+### The tagged-pulse Brewer-Dobson experiment
+
+`run_pulse_bdc.sh` is the **seeded** variant of the section above — the same
+transport-only machinery (`AER_SRC=fixed MICRO=off RAD=0`, both faces at 0,
+`SETTLE=0`, `P_LO_HPA=0.03`), differing only in where the tracer starts. It seeds
+ONLY the tropical lower stratosphere — `FIXED_LAT_MAX_DEG=15`
+with `FIXED_P_LO_HPA=40 / FIXED_P_HI_HPA=90`, landing on 5 levels (43.2–87.8 hPa,
+≈18–24 km) at 4.77e-10 kg/kg, 0.036 Tg of SO4 — and watches where the blob goes.
+`SETTLE=0` and `N_BINS=1` make the tracer passive; the launcher's header states why
+each of those is load-bearing.
+
+Needs `tomas-jax` (`gpu-fast`) but NOT `jax-rrtmgp` (`RAD=0`), and the h1 files for
+`U V OMEGA T num_a1..3 so4_a1..3 SO2 H2SO4 OH RELHUM` — all 14 are opened at
+startup even though transport-only reads few of them, so a missing one stops the
+run. The two figure scripts import only numpy and matplotlib, so the figures can be
+regenerated from `coupled_frames_<TAG>.npz` alone, with no GPU and no CESM.
+
+```bash
+cd <runs dir> && $REPO/run_pulse_bdc.sh 15          # ~12 h on one H100, 3.8 GB of frames
+python3 $REPO/pulse_progress_abs.py pulse_15yr
+python3 $REPO/pulse_deep_branch.py  pulse_15yr          # and --log
+python3 $REPO/gif_run.py pulse_15yr --log --massdens --decades 5 --stride 4
+```
+
+Measured on the 15-year run (1996–2011, 365-day calendar, so a frame index is a date):
+
+| quantity | value |
+|---|---|
+| tropical ascent of the arrival front, 43 → 10 hPa | 0.48 mm/s |
+| ditto, 10 → 0.4 hPa | 0.92 mm/s |
+| polar arrival, lowermost strat / upper strat (60–80 N) | 0.15 yr / 1.45 yr |
+| ditto (60–80 S) | 0.55 yr / 1.75 yr |
+| polar descent from the annual-cycle phase lag (N / S) | −1.46 / −0.89 mm/s |
+| burden remaining after 15 yr | 0.097% of initial |
+
+**Standing caveats for this experiment.**
+
+* The bottom face is at 143 hPa, 1–3 km above the real extratropical tropopause,
+  and 80% of the drainage happens poleward of 35°. Tracer is therefore removed
+  somewhat early: the ~800 d e-folding is a LOWER bound on the true stratospheric
+  lifetime, and the figure legends say "left the 143 hPa domain", not "removed".
+* The descent rate is fitted from the ANNUAL-CYCLE PHASE LAG. Two other
+  conventions were tried and both fail — per-level day-of-maximum hops between
+  winters (+0.49 / −0.49 / −2.49 mm/s for N / S / combined), and first-arrival
+  after a fixed cutoff measures the cutoff itself and comes out with the wrong
+  sign. `pulse_deep_branch.py` documents both; do not reinstate them.
+* `pulse_deep_branch.py` normalises each level by its own maximum. That is what
+  makes the ascent legible, but it also means colour is a RATIO: the late fade at
+  the bottom of the panels is the denominator, not drainage — the late e-folding
+  is 2.13–2.26 yr at every level in both caps.
 
 ## Validation harnesses
 

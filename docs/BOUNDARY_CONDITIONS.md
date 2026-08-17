@@ -49,6 +49,15 @@ day-of-year-cyclic climatology of exactly the fields the BCs consume:
 Runtime then linearly interpolates in day-of-year and cycles forever. One
 `.npz` of a few MB replaces the entire `$CESM_DIR` archive dependence.
 
+**One row of that table is already gone.** `AER_SRC=fixed` (2026-08-13) replaces
+the aerosol IC, the boundary slabs and the polar-cap reservoir with a prescribed
+uniform PSD carrying no CESM information at all, and `BC_TOP_AER=0 BC_BOT_AER=0`
+switches the face inflow off outright. A transport-only run therefore already
+depends on CESM for nothing but U/V/OMEGA/T (+ RELHUM for the wet size) — which is
+exactly the set an emulator replaces by construction. It is not a climatology, so
+it does not solve the coupled model's BC problem; it does mean the advection-only
+comparison can be pointed at a new wind source with no aerosol boundary work.
+
 ## Per-boundary physics
 
 **Bottom (~150 hPa, the production `P_HI_HPA`).** Two distinct roles, now separable:
@@ -63,6 +72,16 @@ Runtime then linearly interpolates in day-of-year and cycles forever. One
 
 **Top (~1 hPa).** Effectively aerosol-free; climatology or zeros. Nothing
 interesting crosses it except number in the smallest bins.
+
+> **Zeros are not free, though — where the lid sits matters.** Measured on the
+> advection-only runs: at a 1 hPa lid, 6.9% of the domain's air descends through
+> the top face per 90 days, and with `BC_TOP_AER=0` it carries `q = 0`, diluting
+> the band *without appearing in any mass term* (the face term counts only aerosol
+> leaving). Tropical zonal-mean ascent turns poleward at ~2.1 hPa in this forcing,
+> so a 1 hPa lid is inside the circulation, not above it. Raising the domain top to
+> 0.03 hPa (33 levels) cuts the descent to ~0.8%. A climatological top slab has the
+> same geometry problem: the fix is the lid height, not the slab's contents. See
+> `../MANIFEST.md`.
 
 **Poles (|lat|>80).** The freeze is *numerical* (lon-sweep CFL ~ 1/cos(lat)
 blows up), not physical — but pinning polar cells to a *background*

@@ -27,7 +27,10 @@ header names the active driver; check it before reasoning about any of them.
 | H2SO4 (gas) | 1 |
 
 All 82 share one wind field, so the substep count is common to all — the batch is
-exact, not an approximation.
+exact, not an approximation. The count is `2·NBINS + 2`, so `N_BINS` changes it
+(a transport-only run at `N_BINS=1` advects 4); under `MICRO=off` the aerosol rows
+are independent passive tracers differing only in fall speed, which is what makes
+one run a whole size-dependence of drainage.
 
 ## 1.2 Scheme: Lin-Rood flux form
 
@@ -156,6 +159,12 @@ global area).
 >
 > The current settings are echoed in every run header; `docs/CONFIGURATION.md`
 > lists the defaults and `MANIFEST.md` explains why each is what it is.
+>
+> The reasoning below applies **directly** to the advection-only experiment, which
+> runs `BC_BOT_AER=0` *and* `BC_TOP_AER=0` on a prescribed uniform PSD
+> (`AER_SRC=fixed`) over 0.03–150 hPa: both faces are aerosol-free, so the band
+> drains and nothing refills it. What differs from this section is only the IC —
+> one uniform mixing ratio instead of a CARMA frame.
 
 **IC:** CARMA, `cesm2.2_CARMA16node_freerun_1wk_19910601_1deg`, frame 0.
 PRSUL + MXAER projected onto 40 TOMAS bins as dry sulfate-equivalent radius at

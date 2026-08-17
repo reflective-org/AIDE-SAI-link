@@ -637,6 +637,25 @@ FIXED_SIGMA = float(os.environ.get('FIXED_SIGMA', '1.6'))
 # gradient, transport then redistributes it).
 FIXED_P_LO_HPA = float(os.environ.get('FIXED_P_LO_HPA', '0.0'))
 FIXED_P_HI_HPA = float(os.environ.get('FIXED_P_HI_HPA', '1e9'))
+# Latitude half-width [deg] the background is placed in. Default 91 = every row,
+# i.e. the uniform IC above, unchanged bit-for-bit.
+#
+# Set it (with the pressure window) to make the run a TAGGED PULSE instead of a
+# drainage run: fill only the tropical lower stratosphere and watch where the
+# blob goes. The two experiments answer different questions and the pulse is the
+# better one for the Brewer-Dobson DEEP branch, because a uniform IC can only
+# show the circulation as the ABSENCE of tracer arriving (drainage age), which
+# needs the clean-air front to traverse the whole circuit before anything is
+# visible -- 4-6 years. A pulse shows the ascent directly, from day one, as the
+# thing that moves. It is the model analogue of the water-vapour tape recorder.
+#
+# NOTE this window also narrows the FACE-INFLOW reservoir, since both come from
+# aer_fill. That is only safe because BC_TOP_AER/BC_BOT_AER scale it afterwards:
+# with both 0 (the advection-MIP setting) the faces carry no aerosol either way.
+# With BC_*_AER != 0 a windowed reservoir means "aerosol-free inflow outside the
+# window", which is a different boundary condition than the uniform run's --
+# state it if you use that combination.
+FIXED_LAT_MAX_DEG = float(os.environ.get('FIXED_LAT_MAX_DEG', '91.0'))
 
 # ---- the aerosol SOURCE joins the scenario stamp ------------------------------
 # APPENDED to INJ_CFG here, rather than written into the array literal above,
@@ -666,10 +685,11 @@ INJ_CFG = np.concatenate([INJ_CFG, np.array([
     # never depends on the run, which is what makes the prefix comparison valid.
     float(_FIXED_PSD_CODES.index(FIXED_PSD)
           if FIXED_PSD in _FIXED_PSD_CODES else -1),
-    FIXED_N, FIXED_DG_NM, FIXED_SIGMA, FIXED_P_LO_HPA, FIXED_P_HI_HPA])])
+    FIXED_N, FIXED_DG_NM, FIXED_SIGMA, FIXED_P_LO_HPA, FIXED_P_HI_HPA,
+    FIXED_LAT_MAX_DEG])])
 INJ_CFG_KEYS = np.concatenate([INJ_CFG_KEYS, np.array([
     'AER_SRC', 'FIXED_PSD', 'FIXED_N', 'FIXED_DG_NM', 'FIXED_SIGMA',
-    'FIXED_P_LO_HPA', 'FIXED_P_HI_HPA'])])
+    'FIXED_P_LO_HPA', 'FIXED_P_HI_HPA', 'FIXED_LAT_MAX_DEG'])])
 
 # N_BINS overrides the tomas-jax default resolution (40) for this run only --
 # rebinds the local NBINS/XK names in this module; tomas_jax.core.config itself
@@ -1671,23 +1691,44 @@ def main():
                  if FIXED_PSD == 'lognormal' else " spread flat over all bins")
               + f" -> Dp(num) {_dpn:.1f} nm, Dp(massw) {_dpm:.1f} nm, "
               f"M={float(_mz.sum()):.3e} kg/kg", flush=True)
-        print(f"  placed uniformly in lat/lon over {_nwin}/{nlev} levels "
+        _latwin = np.abs(lat) <= FIXED_LAT_MAX_DEG                   # (nlat,)
+        if not _latwin.any():
+            raise SystemExit(
+                f"  ERROR: FIXED_LAT_MAX_DEG = {FIXED_LAT_MAX_DEG:g} deg selects NO "
+                f"row of the {lat[0]:.1f}..{lat[-1]:.1f} grid -- the run would "
+                f"start empty.")
+        _lat_all = bool(_latwin.all())
+        _latw_f = _latwin.astype(np.float64)
+        print(f"  placed over {_nwin}/{nlev} levels "
               f"({PLEV_PA[_num_f.sum(0) > 0][0]/100:.1f}-"
-              f"{PLEV_PA[_num_f.sum(0) > 0][-1]/100:.1f} hPa); "
-              f"{int((_nz > 0).sum())}/{NBINS} bins populated, time-invariant",
+              f"{PLEV_PA[_num_f.sum(0) > 0][-1]/100:.1f} hPa)"
+              + (" and uniformly in lat/lon" if _lat_all else
+                 f" and |lat| <= {FIXED_LAT_MAX_DEG:g} deg "
+                 f"({int(_latwin.sum())}/{nlat} rows, "
+                 f"{lat[_latwin][0]:.1f}..{lat[_latwin][-1]:.1f}) -- TAGGED PULSE, "
+                 f"not a uniform band")
+              + f"; {int((_nz > 0).sum())}/{NBINS} bins populated, time-invariant",
               flush=True)
         def aer_fill(t, levs, lat_idx=None):
             pos = [_klev_pos[lv] for lv in levs]
             nj = nlat if lat_idx is None else len(lat_idx)
             shp = (NBINS, len(pos), nj, nlon)
-            # broadcast VIEWS, not copies: the reservoir is one (40,nlev) profile
-            # and every call site immediately does jnp.asarray(), which copies
-            # onto the device anyway. Materializing it would cost 85 MB per array
-            # to store one number per (bin,level) 55k times over. Read-only is a
-            # feature here -- an accidental write to the shared reservoir raises
-            # instead of silently corrupting every later step.
-            return (np.broadcast_to(_num_f[:, pos, None, None], shp),
-                    np.broadcast_to(_mas_f[:, pos, None, None], shp))
+            if _lat_all:
+                # broadcast VIEWS, not copies: the reservoir is one (40,nlev)
+                # profile and every call site immediately does jnp.asarray(),
+                # which copies onto the device anyway. Materializing it would
+                # cost 85 MB per array to store one number per (bin,level) 55k
+                # times over. Read-only is a feature here -- an accidental write
+                # to the shared reservoir raises instead of silently corrupting
+                # every later step.
+                return (np.broadcast_to(_num_f[:, pos, None, None], shp),
+                        np.broadcast_to(_mas_f[:, pos, None, None], shp))
+            # windowed: the lat factor has to be materialized, but only over
+            # (bin, lev, lat) -- the lon axis stays a broadcast view, so this is
+            # ~2 MB, not the 85 MB a full materialization would cost.
+            lw = (_latw_f if lat_idx is None else _latw_f[lat_idx])[None, None, :, None]
+            return (np.broadcast_to(_num_f[:, pos, None, None] * lw, shp),
+                    np.broadcast_to(_mas_f[:, pos, None, None] * lw, shp))
     elif AER_SRC == 'mam4':
         print("=== initializing size bins from MAM4 ===", flush=True)
         def aer_fill(t, levs, lat_idx=None):
@@ -2115,6 +2156,66 @@ def main():
         return np.asarray((q * jnp.asarray(DP)[None, :, None, None]).sum(1)
                           / DP.sum()).mean(-1)
     frames_so2 = []; frames_h2so4 = []
+    # ---- COLUMN and ZONAL-MEAN frame reductions (advection-MIP) ------------
+    # Every frame diagnostic above is ONE LEVEL (KPROBE), which shows horizontal
+    # transport and nothing else: a plume that tilts, sinks or is lofted leaves
+    # the picture entirely. These two reductions put the vertical back in --
+    # a column integral (what the whole band holds under each grid point, so
+    # nothing can hide by changing level) and a lat-height zonal mean (where it
+    # is going vertically). Both must be computed HERE, from the 3-D state; the
+    # frames file has never carried it and a 24-level (40,24,192,288) frame is
+    # 530 MB, so the full field is not an option.
+    frames_col_num = []; frames_col_mas = []; frames_col_dT = []
+    frames_col_so2 = []; frames_col_h2so4 = []
+    frames_zm_num = []; frames_zm_mas = []; frames_zm_dT = []
+    frames_zm_so2 = []; frames_zm_h2so4 = []
+    _COL_W = jnp.asarray(DP / GRAV)          # (nlev,) kg air/m2 per unit of dp
+    COL_KGM2 = float(DP.sum() / GRAV)        # air mass of the whole band [kg/m2]
+
+    def col_int(q):
+        """Vertical integral sum_k q_k * dp_k / g of a MIXING RATIO field.
+
+        (NBINS,nlev,nlat,nlon) -> (NBINS,nlat,nlon) and (nlev,nlat,nlon) ->
+        (nlat,nlon): the level axis is q.ndim-3 either way. Units follow the
+        tracer -- kg/kg -> kg/m2, #/kg -> #/m2.
+
+        The air-mass-weighted column MEAN mixing ratio is exactly this divided
+        by COL_KGM2, and on FIXED pressure levels COL_KGM2 is a constant, so the
+        "column sum" and "column mean" maps are the SAME FIELD in different
+        units. Only the integral is stored; COL_KGM2 goes in the frames file so
+        the plots can convert either way without a second 35 MB array.
+
+        Stored float32 deliberately: these are plotting arrays (7 significant
+        digits against a colorbar's ~3), and at f64 the bin-resolved pair would
+        add 3.2 GB to a 90-day run instead of 1.6 GB. The PHYSICS state
+        (coupled_state/final) stays f64 and is untouched by this.
+        """
+        return np.asarray(jnp.tensordot(_COL_W, q, axes=([0], [q.ndim - 3])),
+                          dtype=np.float32)
+
+    def zm(q):
+        """Zonal-mean cross-section: (NBINS,nlev,nlat) binned, (nlev,nlat) not.
+
+        Plain mean over longitude of the mixing ratio. NOT area- or mass-
+        weighted: a lat-height section is read cell by cell, and a cos(phi)
+        weight would rescale each row by one constant without changing anything
+        the eye reads off it.
+
+        SIZE-RESOLVED as of 2026-08-14; it summed the bins before. Under
+        MICRO=off every bin is an INDEPENDENT passive tracer carried by the same
+        winds and differing only in fall speed (v_g ~ Dp^2, ~Dp in the slip
+        limit), so the smallest bins are a settling-free age-of-air tracer and
+        the largest are settling-dominated -- two experiments in one run, which
+        summing the bins added together and destroyed. Measured on the 90-day
+        mip_cesm state: at 8.6-43 hPa the 3 nm bin still holds 0.99-1.00 of the
+        original air while the 1.2 um bin is down to 0.28, and the bin-summed
+        section shows neither. Costs ~1.0 MB/frame against the ~53 MB/frame the
+        probe-level and column frames already carry.
+
+        Consumers must sum the bin axis themselves; plot_run.py and gif_run.py
+        do it by rank (ndim == 4), so pre-2026-08-14 frames files still plot.
+        """
+        return np.asarray(q, dtype=np.float32).mean(-1)
     KPROBE = int(np.argmin(np.abs(PLEV_PA / 100 - PROBE_HPA)))   # diagnostic probe level
     # Names the reservoir the boundary is actually served from. This was a
     # two-way 'per-step MAM4' / 'static CARMA' choice, so AER_SRC=fixed printed
@@ -2156,14 +2257,55 @@ def main():
           + "NO mass fixer (open system)", flush=True)
     print(f"  probe/frames at {PLEV_PA[KPROBE]/100:.1f} hPa", flush=True)
 
+    def push_frame(hour):
+        """Append ONE frame of every recorded diagnostic, for `hour`.
+
+        One function rather than two copies of the append block. The initial
+        frame and the in-loop frames used to be six duplicated appends each, so
+        every new diagnostic had to be added in two places and a frame history
+        one entry short in exactly one array was the failure mode. Reads the
+        enclosing scope's live num/mas/so2/h2so4/dT_rad, so it always records
+        the state as of the call.
+        """
+        frames_num.append(np.asarray(num[:, KPROBE]).copy())
+        frames_mas.append(np.asarray(mas[:, KPROBE]).copy())
+        frames_psd_n.append(psd_zm(num)); frames_psd_m.append(psd_zm(mas))
+        frames_dT.append(np.asarray(dT_rad[KPROBE]).copy())
+        frames_so2.append(np.asarray(so2[KPROBE]).copy())
+        frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
+        # column integrals [kg/m2, #/m2]; dT is the air-mass-weighted column
+        # MEAN [K] instead of an integral, since K*kg/m2 is not a readable unit
+        frames_col_num.append(col_int(num)); frames_col_mas.append(col_int(mas))
+        frames_col_so2.append(col_int(so2))
+        frames_col_h2so4.append(col_int(h2so4))
+        frames_col_dT.append(col_int(dT_rad) / COL_KGM2)
+        # lat-height zonal-mean cross-sections
+        frames_zm_num.append(zm(num)); frames_zm_mas.append(zm(mas))
+        frames_zm_dT.append(zm(dT_rad))
+        frames_zm_so2.append(zm(so2)); frames_zm_h2so4.append(zm(h2so4))
+        frame_hours.append(hour)
+
+    # every frame array, by the name it is stored under: the RESUME trim and both
+    # savez calls iterate this instead of listing thirteen names three times
+    FRAME_ARRAYS = {
+        'frames_num': frames_num, 'frames_mas': frames_mas,
+        'frames_psd_num': frames_psd_n, 'frames_psd_mas': frames_psd_m,
+        'frames_dT': frames_dT, 'frames_so2': frames_so2,
+        'frames_h2so4': frames_h2so4,
+        'frames_col_num': frames_col_num, 'frames_col_mas': frames_col_mas,
+        'frames_col_dT': frames_col_dT, 'frames_col_so2': frames_col_so2,
+        'frames_col_h2so4': frames_col_h2so4,
+        'frames_zm_num': frames_zm_num, 'frames_zm_mas': frames_zm_mas,
+        'frames_zm_dT': frames_zm_dT, 'frames_zm_so2': frames_zm_so2,
+        'frames_zm_h2so4': frames_zm_h2so4,
+    }
+    # grid the cross-sections are drawn on, so the plots need only the frames file
+    FRAME_GRID = dict(probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
+                      plev_hpa=PLEV_PA / 100.0, dp_pa=np.asarray(DP),
+                      col_kgm2=COL_KGM2, lat=lat, lon=lon)
+
     # capture the true initial state as frame 0
-    frames_num.append(np.asarray(num[:, KPROBE]).copy())
-    frames_mas.append(np.asarray(mas[:, KPROBE]).copy())
-    frames_psd_n.append(psd_zm(num)); frames_psd_m.append(psd_zm(mas)) 
-    frames_dT.append(np.asarray(dT_rad[KPROBE]).copy())
-    frames_so2.append(np.asarray(so2[KPROBE]).copy())
-    frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
-    frame_hours.append(0)
+    push_frame(0)
 
     N_STEPS = N_HOURS // STEP_HOURS
     FRAME_EVERY_STEPS = max(1, round(FRAME_EVERY / STEP_HOURS))
@@ -2289,33 +2431,35 @@ def main():
         try:
             _fk = np.load(_ff)
             frame_hours = [int(h) for h in _fk['frame_hours']]
-            frames_num = [a.copy() for a in _fk['frames_num']]
-            frames_mas = [a.copy() for a in _fk['frames_mas']]
             # Append-only, same rule as the D_* drain counters: a frames ckpt
-            # written before these existed resumes with an EMPTY psd history
-            # rather than being rejected. It is then shorter than frame_hours,
-            # and np.stack of two different lengths into one file would put the
-            # psd arrays on a time axis that is not theirs -- so drop the frames
-            # that predate the diagnostic instead of misdating them.
-            frames_psd_n = [a.copy() for a in _fk['frames_psd_num']] \
-                if 'frames_psd_num' in _fk.files else []
-            frames_psd_m = [a.copy() for a in _fk['frames_psd_mas']] \
-                if 'frames_psd_mas' in _fk.files else []
-            if len(frames_psd_n) != len(frames_num):
-                print(f"  NOTE: frames ckpt predates the vertically-averaged PSD "
-                      f"({len(frames_psd_n)} of {len(frames_num)} frames carry "
-                      f"it) -- dropping the earlier frames so every frame array "
+            # written before one of these diagnostics existed resumes with that
+            # history EMPTY rather than being rejected. It is then shorter than
+            # frame_hours, and np.stack of two different lengths into one file
+            # would put the newer arrays on a time axis that is not theirs -- so
+            # drop the frames that predate the youngest diagnostic instead of
+            # misdating them.
+            #
+            # Driven off FRAME_ARRAYS so a new diagnostic is handled by adding it
+            # THERE and nowhere else. Every list is filled and trimmed IN PLACE
+            # (lst[:] = ...): FRAME_ARRAYS holds references to these list objects,
+            # so rebinding the names here would leave the dict -- and therefore
+            # both savez calls -- pointing at the pre-resume lists.
+            # Rebinding is also what made the old version's trim a no-op for
+            # frames_dT/so2/h2so4: it trimmed them BEFORE reading them from the
+            # ckpt, then overwrote all three with the untrimmed arrays, so exactly
+            # the three arrays the filmstrip needs came back on the wrong time axis.
+            for _k, _lst in FRAME_ARRAYS.items():
+                _lst[:] = ([a.copy() for a in _fk[_k]] if _k in _fk.files else [])
+            _kp = min([len(frame_hours)] + [len(v) for v in FRAME_ARRAYS.values()])
+            if any(len(v) != _kp for v in FRAME_ARRAYS.values()):
+                _short = sorted(k for k, v in FRAME_ARRAYS.items() if len(v) == _kp)
+                print(f"  NOTE: frames ckpt predates {', '.join(_short)} "
+                      f"({_kp} of {len(frame_hours)} frames carry all of them) "
+                      f"-- dropping the earlier frames so every frame array "
                       f"shares one time axis.", flush=True)
-                _kp = len(frames_psd_n)
                 frame_hours = frame_hours[-_kp:] if _kp else []
-                frames_num = frames_num[-_kp:] if _kp else []
-                frames_mas = frames_mas[-_kp:] if _kp else []
-                frames_dT = frames_dT[-_kp:] if _kp else []
-                frames_so2 = frames_so2[-_kp:] if _kp else []
-                frames_h2so4 = frames_h2so4[-_kp:] if _kp else []
-            frames_dT = [a.copy() for a in _fk['frames_dT']]
-            frames_so2 = [a.copy() for a in _fk['frames_so2']]
-            frames_h2so4 = [a.copy() for a in _fk['frames_h2so4']]
+                for _lst in FRAME_ARRAYS.values():
+                    _lst[:] = _lst[-_kp:] if _kp else []
         except Exception as _e:
             print(f"  WARNING: frames ckpt {_ff} is unreadable "
                   f"({type(_e).__name__}: {_e}).\n"
@@ -2328,8 +2472,9 @@ def main():
                   "    known-good frames ckpt before resuming if you need the "
                   "earlier frames.", flush=True)
             frame_hours = []
-            frames_num = []; frames_mas = []; frames_dT = []
-            frames_so2 = []; frames_h2so4 = []
+            # in place, for the same reason the load above is (see FRAME_ARRAYS)
+            for _lst in FRAME_ARRAYS.values():
+                _lst[:] = []
         # The timeseries ckpt gets the same treatment as the frames one above, and
         # for the same reason: it is a DIAGNOSTIC record, not the physics. Every
         # cumulative counter the run needs to continue correctly (cumB/cumV, the
@@ -3088,13 +3233,7 @@ def main():
                       f"(={settle_cum/M0:+.2e} M0)", flush=True)
 
         if (s + 1) % FRAME_EVERY_STEPS == 0 or s == N_STEPS - 1:
-            frames_num.append(np.asarray(num[:, KPROBE]).copy())
-            frames_mas.append(np.asarray(mas[:, KPROBE]).copy())
-            frames_psd_n.append(psd_zm(num)); frames_psd_m.append(psd_zm(mas))
-            frames_dT.append(np.asarray(dT_rad[KPROBE]).copy())
-            frames_so2.append(np.asarray(so2[KPROBE]).copy())
-            frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
-            frame_hours.append(it1)
+            push_frame(it1)
             # incremental checkpoint: frames/timeseries are otherwise only
             # written once at the very end, so a killed/crashed multi-hour run
             # loses everything. Overwrite a single _ckpt file each frame (cheap:
@@ -3103,13 +3242,8 @@ def main():
             # here cost the prod1yr frames history to an OOM kill mid-write.
             savez_atomic(f'coupled_frames_{OUT_TAG}_ckpt.npz',
                      frame_hours=np.array(frame_hours),
-                     frames_num=np.stack(frames_num), frames_mas=np.stack(frames_mas),
-                     frames_psd_num=np.stack(frames_psd_n),
-                     frames_psd_mas=np.stack(frames_psd_m),
-                     frames_dT=np.stack(frames_dT),
-                     frames_so2=np.stack(frames_so2),
-                     frames_h2so4=np.stack(frames_h2so4),
-                     probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP)
+                     **{k: np.stack(v) for k, v in FRAME_ARRAYS.items()},
+                     **FRAME_GRID)
             savez_atomic(f'coupled_timeseries_{OUT_TAG}_ckpt.npz', N0=N0, M0=M0,
                      inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
                      phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
@@ -3164,18 +3298,14 @@ def main():
              inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
              phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
              **{k: np.array(v) for k, v in ts.items()})
-    #single level
+    # frames: KPROBE single level (frames_*), column integrals (frames_col_*)
+    # and lat-height zonal means (frames_zm_*) -- see push_frame/col_int/zm
     np.savez(f'coupled_frames_{OUT_TAG}.npz',
              inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
              phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
              frame_hours=np.array(frame_hours),
-             frames_num=np.stack(frames_num), frames_mas=np.stack(frames_mas),
-             frames_psd_num=np.stack(frames_psd_n),
-             frames_psd_mas=np.stack(frames_psd_m),
-             frames_dT=np.stack(frames_dT),
-             frames_so2=np.stack(frames_so2),
-             frames_h2so4=np.stack(frames_h2so4),
-             probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP)
+             **{k: np.stack(v) for k, v in FRAME_ARRAYS.items()},
+             **FRAME_GRID)
     print(f"saved coupled_final/timeseries/frames_{OUT_TAG}.npz "
           f"({len(frame_hours)} frames)", flush=True)
 

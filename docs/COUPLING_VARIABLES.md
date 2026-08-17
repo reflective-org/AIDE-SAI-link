@@ -10,6 +10,14 @@ pressure (`P_LO_HPA`..`P_HI_HPA`). Coupling step = `STEP_HOURS` (6 h).
 
 ## 1. Input fields read from CESM FWHIST `*.cam.h1.*` (hourly)
 
+> All 14 non-radiation datasets below are **opened at startup regardless of
+> configuration**, so a missing file stops even a run that never reads the field.
+> A transport-only run (`MICRO=off`, `AER_SRC=fixed`) reads `U V OMEGA` and `T`
+> every step, `RELHUM` too while `WET_SETTLING=1`, and `SO2`/`H2SO4` for the two
+> gas tracers' IC and open-BC — those just have no chemistry to drive, so they
+> ride along inert. `OH` and the MAM4 fields are read by nothing; the 7 radiation
+> variables are not even opened when `RAD=0`.
+
 ### Dynamics / thermodynamics (always)
 | var | units (file) | role |
 |-----|------|------|
@@ -97,11 +105,22 @@ Advected tracer count = 2·NBINS + 2 (num+mas per bin, plus SO₂, H₂SO₄) = 
 `LAT_FREEZE` (=80°, polar-cap latitude, constant).
 
 ### Aerosol source & bin grid
-`AER_SRC` (`carma`|`mam4`), `N_BINS` (0→native 40), `CARMA_FILE`, `CARMA_FRAME`,
-`CARMA_RHO` (1923), `INIT_BIN` (`so4`, the default | `dgnum`, legacy), `INIT_SIGMA`.
+`AER_SRC` (`carma`|`mam4`|`fixed`), `N_BINS` (0→native 40), `CARMA_FILE`,
+`CARMA_FRAME`, `CARMA_RHO` (1923), `INIT_BIN` (`so4`, the default | `dgnum`,
+legacy), `INIT_SIGMA`.
+
+`AER_SRC=fixed` replaces the CESM aerosol entirely with a prescribed uniform,
+time-invariant PSD — the advection-only experiment — and adds `FIXED_PSD`
+(`lognormal`|`flat`), `FIXED_N` (1e8 #/kg), `FIXED_DG_NM` (200), `FIXED_SIGMA`
+(1.6), `FIXED_P_LO_HPA` / `FIXED_P_HI_HPA` (the pressure window, default = whole
+band) and `FIXED_LAT_MAX_DEG` (91 = every row; set it for a tagged pulse). None of
+the MAM4 or CARMA fields below are read in that mode, and all seven values are
+stamped into every output `.npz`. Defaults and rationale:
+[CONFIGURATION.md](./CONFIGURATION.md), [../MANIFEST.md](../MANIFEST.md).
 
 ### Microphysics
-`MICRO` (`full`|`coag`), `MICRO_SUBSTEPS` (6), `N_COAG_SUBSTEPS`,
+`MICRO` (`full`|`coag`|`off`; `off` = advect+settle only, and the only mode
+`driver_fast.py` refuses), `MICRO_SUBSTEPS` (6), `N_COAG_SUBSTEPS`,
 `COAG_MAX_SUBSTEPS` (256; physical-path substep cap), `ALPHA_COND` (1.0),
 `CELL_CHUNK`, `TRACER_CHUNK`, `SETTLE`.
 
@@ -182,14 +201,38 @@ diagnostics are added by extending that tuple.
 | normalizers | `N0`, `M0` (scalars, not series) |
 | time | `hours` |
 | burdens | `Nburden`, `Mburden`, `SO2burden`, `H2SO4burden` |
-| size | `meanDp_nm`, `meanDp_num_nm`, `meanDp_mass_nm`, `reff_nm` |
+| size, probe level | `meanDp_nm`, `meanDp_num_nm`, `meanDp_mass_nm`, `reff_nm` |
+| size, **whole band** (air-mass weighted; separate keys, not a redefinition) | `reff_dom_nm`, `meanDp_num_dom_nm`, `meanDp_mass_dom_nm` |
 | budget (cumulative, fractions of M0) | `B_adv_np`, `B_adv_pol`, `B_floor`, `B_micro`, `B_bc`, `B_settle`, `B_vf_in`, `B_vf_out` |
 | radiation | `dT_min`, `dT_max`, `dT_rms`, `arf_toa`, `arf_toa_avg`, `aod550` |
 | accounting | `nsub`, `Nmin`, `Nmax`, `Nfloor_cum`, `clipMadd_cum`, `clipMrem_cum`, `injSO2_cum`, `settleM_cum` |
+| **resolved drain**, cumulative — one **vector** per record, so the saved arrays are `(nsteps, nlat)` / `(nsteps, NBINS)` | `D_setN_lat`, `D_setM_lat`, `D_setN_bin`, `D_setM_bin` (settling) and `D_vfN_lat`, `D_vfM_lat`, `D_vfN_bin`, `D_vfM_bin` (advective flux through the same face) |
 
-**Frames** (`coupled_frames_<TAG>.npz`), probe-level snapshots every
-`FRAME_EVERY` hours: `frames_num`, `frames_mas`, `frames_dT`, `frames_so2`,
-`frames_h2so4`, plus `frame_hours`, `probe_hpa` and `xk`.
+The drain vectors are what `plot_run.py`'s `<TAG>_drain.png` is drawn from — the
+figure of the advection-only comparison — and they close against the globally
+summed counters: `D_setM_lat.sum() == settleM_cum`, `D_vfM_lat.sum() ==
+-B_vf_out*M0`. The two channels are kept apart on purpose: settling depends on the
+model's T and nothing else, the advective flux *is* the residual circulation.
+
+**Frames** (`coupled_frames_<TAG>.npz`), snapshots every `FRAME_EVERY` hours, in
+three reductions of the same fields — probe level (`frames_*`), vertical column
+integral (`frames_col_*`, f32) and zonal-mean lat–height cross-section
+(`frames_zm_*`):
+
+| group | keys |
+|---|---|
+| probe level (`PROBE_HPA`) | `frames_num`, `frames_mas`, `frames_dT`, `frames_so2`, `frames_h2so4` |
+| column | `frames_col_num`, `frames_col_mas`, `frames_col_dT`, `frames_col_so2`, `frames_col_h2so4` |
+| zonal-mean cross-section (bin-summed) | `frames_zm_num`, `frames_zm_mas`, `frames_zm_dT`, `frames_zm_so2`, `frames_zm_h2so4` |
+| vertically averaged PSD | `frames_psd_num`, `frames_psd_mas` |
+| grid, so the plots need only this file | `frame_hours`, `probe_hpa`, `xk`, `plev_hpa`, `dp_pa`, `col_kgm2`, `lat`, `lon` |
+
+A single-level map cannot show vertical transport at all — aerosol that sinks out
+of the probe level simply vanishes from the figure — which is why the column and
+cross-section reductions exist and why they are the ones the filmstrip and GIFs
+prefer. Frames are the big output: ~50 MB per frame at 40 bins, ~3.5 MB at
+`N_BINS=1`. **The whole history is rewritten at every frame**, so cost grows as
+(frames)²; raise `FRAME_EVERY` for long runs.
 
 **Both files also carry the run's configuration stamp** — `inj_cfg` /
 `inj_cfg_keys` (the injection scenario) and `phys_cfg` / `phys_cfg_keys` (the

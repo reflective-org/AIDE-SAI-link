@@ -22,6 +22,12 @@ change would make a slot harder to swap. `README.md` is the orientation;
 default and, more importantly, *why* each one is what it is. Where `docs/`
 disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
 
+**On the `advection-mip` branch** the working configuration is the reduced one:
+transport (± settling) of a prescribed uniform PSD, `DRIVER=coupling.py MICRO=off
+RAD=0 AER_SRC=fixed`, both faces aerosol-free, 0.03–150 hPa. `README.md` on this
+branch documents that experiment and nothing else; MANIFEST still covers the whole
+tree, including the coupled model the flags above switch off.
+
 ## Layout invariants
 
 - **The core modules are flat on purpose.** `coupling.py` does bare
@@ -30,7 +36,11 @@ disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
   them into packages breaks those imports.
 - `driver_fast.py` is the production entry point: it imports `coupling.py` and
   monkeypatches in the batched `tomas_jax.fast` engine. `coupling.py` alone is
-  the standalone/dev path and uses the same advection, so the two agree.
+  the standalone/dev path and uses the same advection, so the two agree. It is
+  also the **only** path that runs `MICRO=off`, which the advection-only
+  experiment on this branch needs — `run_prod.sh` reaches it with
+  `DRIVER=coupling.py`, so both configurations share one launcher and one
+  production environment.
 - `fct_core.py` is legacy and **not on the run path** — it exists only for the
   bit-identical comparison in `validation/test_conservation.py`.
 - Analysis scripts read `coupled_*_<TAG>.npz` from the *current working

@@ -6,7 +6,13 @@ That indirection was the source of "I edited the script and nothing changed":
 the edit landed in week_sizedist.png while zonal90d_sizedist.png stayed stale.
 
   1) dashboard      -> {TAG}_dashboard.png   burdens, radiative feedback, size, gases, budget
-  2) filmstrip      -> {TAG}_filmstrip.png   dT_rad + aerosol mass at the probe level
+  2) filmstrip      -> {TAG}_filmstrip.png   dT_rad + aerosol mass, COLUMN
+                                             integrals when the run recorded them
+                                             (frames_col_*), else the probe level
+ 2b) cross-section  -> {TAG}_crosssection.png zonal-mean lat-height sections of the
+                                             same two fields -- the vertical
+                                             transport the maps cannot show.
+                                             Needs frames_zm_* (advection-MIP)
   3) size-dist      -> {TAG}_sizedist.png    dN/dlogDp evolution, two panels
                                              (global mean | 15S-15N), fixed axes
   4) drainage       -> {TAG}_drain.png      how fast the band empties and through
@@ -407,7 +413,12 @@ def effective_diameter():
                 "wet effective diameter")
     if not FRAMES_OK:
         return None
-    num = get_num()
+    # frames_col_num (column integral, #/m2) in preference to frames_num (one
+    # level, #/kg). D_eff is a RATIO of moments of the same array, so the change
+    # of units cancels exactly and only the sampling changes -- from 51.7 hPa to
+    # the whole band, which is what the burdens beside this panel are quoted over.
+    _iscol = "frames_col_num" in fr.files
+    num = fr["frames_col_num"] if _iscol else get_num()
     if num is None:
         return None
     # Runs from before reff_nm was recorded (prod90d, prod1yr): rebuild the same
@@ -431,7 +442,8 @@ def effective_diameter():
     wn = (num * wlat_full()[None, None, :, None]).sum(axis=(2, 3))   # (nf,40)
     deff = ((wn * Dp_mid ** 3).sum(axis=1)
             / np.maximum((wn * Dp_mid ** 2).sum(axis=1), 1e-300))
-    return fh / 24.0, deff, "dry effective diameter"
+    return (fh / 24.0, deff,
+            "dry effective diameter" + (" (column)" if _iscol else " (probe)"))
 
 
 DEFF = effective_diameter()
@@ -567,8 +579,16 @@ lat = np.linspace(-90, 90, nlat); lon = np.linspace(0, 360, nlon, endpoint=False
 # every frames file has -- NOT frames_dT, which may be absent here). FRAMES_OK is
 # false when that block could not read the file at all, which is a stronger
 # failure than the per-array _missing check below.
-_missing = [k for k in ("frames_dT", "frames_mas") if k not in fr.files] \
-    if FRAMES_OK else ["*"]
+#
+# COLUMN, not the probe level, whenever the run recorded it (frames_col_*, added
+# for the advection-MIP). A single level shows horizontal transport only: aerosol
+# that sinks or is lofted out of 51.7 hPa simply vanishes from the map, which on a
+# figure about TRANSPORT is the one artifact that matters. The column integral
+# cannot lose it -- it can only move within the band. Runs predating the diagnostic
+# fall back to the probe level, and the title says which one is drawn.
+_HAS_COL = FRAMES_OK and "frames_col_mas" in fr.files
+_need = ("frames_col_dT", "frames_col_mas") if _HAS_COL else ("frames_dT", "frames_mas")
+_missing = [k for k in _need if k not in fr.files] if FRAMES_OK else ["*"]
 if not FRAMES_OK:
     print(f"  filmstrip SKIPPED: {TAG} frames file is unreadable")
 elif _missing:
@@ -577,8 +597,29 @@ elif _missing:
 else:
     probe = float(fr["probe_hpa"])
 if not _missing:
-    dT = fr["frames_dT"]                              # (nf,nlat,nlon)
-    mass = fr["frames_mas"].sum(axis=1)               # (nf,nlat,nlon) total SO4 mass MR
+    # COL_KGM2 = sum(dp)/g, the air mass of the whole band [kg/m2]. On FIXED
+    # pressure levels it is a constant, so the column SUM and the air-mass-weighted
+    # column MEAN are the same field in different units -- which is why coupling.py
+    # stores only the integral, and why the two colorbars below are one axis with
+    # two scales rather than two maps.
+    COL_KGM2 = float(fr["col_kgm2"]) if "col_kgm2" in fr.files else float("nan")
+    if _HAS_COL:
+        dT = fr["frames_col_dT"]                      # (nf,nlat,nlon) [K], column mean
+        mass = fr["frames_col_mas"].sum(axis=1) * 1e6   # kg/m2 -> mg/m2
+        MLAB = "column SO4 [mg m$^{-2}$]"
+        MLAB2 = "column-mean SO4 [$\\times 10^{-9}$ kg/kg]"
+        M2 = 1e3 / COL_KGM2                # mg/m2 -> 1e-9 kg/kg (mean MR)
+        DLAB = "column-mean dT_rad [K]"
+        WHERE = f"column integral ({float(fr['plev_hpa'][0]):.0f}-" \
+                f"{float(fr['plev_hpa'][-1]):.0f} hPa)" \
+                if "plev_hpa" in fr.files else "column integral"
+    else:
+        dT = fr["frames_dT"]                          # (nf,nlat,nlon)
+        mass = fr["frames_mas"].sum(axis=1) * 1e9     # total SO4 MR, 1e-9 kg/kg
+        MLAB = "SO4 [$\\times 10^{-9}$ kg/kg]"
+        MLAB2 = M2 = None
+        DLAB = "dT_rad [K]"
+        WHERE = f"{probe:.1f} hPa"
     assert dT.shape[0] == nf, f"frames_dT has {dT.shape[0]} frames, frame_hours {nf}"
     sel = np.unique(np.linspace(0, nf - 1, min(5, nf)).astype(int))   # up to 5 snapshots
 
@@ -589,9 +630,17 @@ if not _missing:
     nrow = 1 if RAD_OFF else 2
     fig = plt.figure(figsize=(COL_W * len(sel), COL_W * nrow / 2 + 1.1),
                      constrained_layout=True)
-    fig.suptitle(f"Spatial evolution @ {probe:.1f} hPa: "
+    # The "and the means as well": on FIXED pressure levels the air-mass-weighted
+    # column MEAN mixing ratio is the column SUM divided by the constant
+    # COL_KGM2, so the mean map IS this map -- drawing it separately would be the
+    # identical picture twice. It goes on the title as the one number that
+    # converts the colorbar, because neither a second colorbar axis nor a
+    # second label line fits beside a cartopy row at this figure width.
+    fig.suptitle(f"Spatial evolution, {WHERE}: "
                  + ("aerosol mass" if RAD_OFF
-                    else "radiative heating (top) & aerosol mass (bottom)"),
+                    else "radiative heating (top) & aerosol mass (bottom)")
+                 + (f"\ncolumn mean = {M2:.3g} $\\times$ colorbar, in {MLAB2}"
+                    if M2 is not None and np.isfinite(M2) else ""),
                  fontsize=13, fontweight="bold")
     # dT is strongly one-sided: ~-0.12 K of cooling against ~+3.9 K of heating.
     # Scale SYMMETRICALLY about 0 off the heating limb -- white stays at zero and
@@ -608,8 +657,8 @@ if not _missing:
     # is why the drain filmstrip came out five near-identical yellow panels.
     # Decide from the data rather than from the run type: keep the zero anchor
     # only when the low end really does approach zero.
-    mvmax = float(np.nanpercentile(mass[sel] * 1e9, 99.5))
-    mvmin = float(np.nanpercentile(mass[sel] * 1e9, 0.5))
+    mvmax = float(np.nanpercentile(mass[sel], 99.5))
+    mvmin = float(np.nanpercentile(mass[sel], 0.5))
     if mvmin > 0.15 * mvmax:
         mnorm = mcolors.Normalize(mvmin, mvmax)
     else:
@@ -629,7 +678,7 @@ if not _missing:
         # the day label belongs to whichever row is on top
         axm = fig.add_subplot(nrow, len(sel), (nrow - 1) * len(sel) + j + 1,
                               projection=proj)
-        axm.pcolormesh(lon, lat, mass[fi] * 1e9, cmap="viridis", norm=mnorm,
+        axm.pcolormesh(lon, lat, mass[fi], cmap="viridis", norm=mnorm,
                        transform=proj, shading="auto")
         axm.coastlines(linewidth=0.3, color="w")
         if RAD_OFF:
@@ -638,12 +687,91 @@ if not _missing:
     if top_axes:
         sm1 = plt.cm.ScalarMappable(cmap="RdBu_r", norm=dnorm)
         fig.colorbar(sm1, ax=top_axes, orientation="vertical", fraction=0.02,
-                     pad=0.01, aspect=18, label="dT_rad [K]", extend="max")
+                     pad=0.01, aspect=18, label=DLAB, extend="max")
     sm2 = plt.cm.ScalarMappable(cmap="viridis", norm=mnorm)
-    fig.colorbar(sm2, ax=bot_axes, orientation="vertical", fraction=0.02, pad=0.01,
-                 aspect=18 // nrow, label="SO4 [x1e-9 kg/kg]",
-                 extend="both" if mnorm.vmin > 0 else "max")
+    # the mass colorbar is the short one (aspect scaled down by nrow), so its
+    # rotated label runs off the bar vertically at the default size, not
+    # horizontally off the figure -- keep the text short and small
+    cb2 = fig.colorbar(sm2, ax=bot_axes, orientation="vertical", fraction=0.02,
+                       pad=0.01, aspect=18 // nrow,
+                       extend="both" if mnorm.vmin > 0 else "max")
+    cb2.set_label(MLAB, fontsize=9)
     save(fig, "filmstrip", bbox_inches="tight")
+
+# =====================================================================
+# FIG 2b -- ZONAL-MEAN CROSS-SECTIONS: lat-height, across the run
+#   -> {TAG}_crosssection.png
+# The filmstrip above answers "where has it spread"; this answers "how is it
+# moving vertically" -- ascent in the tropical pipe, poleward-and-down along the
+# Brewer-Dobson branches, and the settling tail off the bottom of the band, none
+# of which a horizontal field can show at all. Needs frames_zm_* (advection-MIP
+# addition); older runs simply do not get the figure.
+# =====================================================================
+_zm_need = ("frames_zm_mas", "plev_hpa")
+_zm_missing = [k for k in _zm_need if k not in fr.files] if FRAMES_OK else ["*"]
+if _zm_missing:
+    print(f"  cross-section SKIPPED: {TAG} frames file has no "
+          f"{', '.join(_zm_missing)} (predates the diagnostic)")
+else:
+    plev = np.asarray(fr["plev_hpa"], float)          # (nlev,) hPa, top first
+    latz = lat_full()
+    # (nf,NBINS,nlev,nlat) since 2026-08-14, (nf,nlev,nlat) before it. Sum the
+    # bin axis by RANK rather than by run age, so both vintages plot.
+    zmass = np.asarray(fr["frames_zm_mas"], float)
+    if zmass.ndim == 4:
+        zmass = zmass.sum(1)
+    zmass = zmass * 1e9                                    # (nf,nlev,nlat)
+    zdT = np.asarray(fr["frames_zm_dT"], float) if "frames_zm_dT" in fr.files \
+        else np.zeros_like(zmass)
+    sel_z = np.unique(np.linspace(0, nf - 1, min(5, nf)).astype(int))
+    _rad = (not RAD_OFF) and np.any(zdT != 0)
+    nrow_z = 2 if _rad else 1
+
+    # LOG pressure axis, inverted. A 1-150 hPa band is 2+ decades and a linear
+    # axis spends three quarters of its height on the bottom decade, squashing the
+    # 1-10 hPa levels -- where the injected plume actually sits -- into a strip.
+    fig, axs = plt.subplots(nrow_z, len(sel_z), squeeze=False,
+                            figsize=(3.1 * len(sel_z), 2.9 * nrow_z + 0.9),
+                            sharex=True, sharey=True, constrained_layout=True)
+    fig.suptitle("Zonal-mean cross-sections: "
+                 + ("radiative heating (top) & aerosol mass (bottom)" if _rad
+                    else "aerosol mass mixing ratio"),
+                 fontsize=13, fontweight="bold")
+    # Same norm rule as the filmstrip: symmetric about zero for dT (white == no
+    # heating), zero-anchored for mass unless the field never approaches zero.
+    zhi = float(np.nanpercentile(zmass[sel_z], 99.5))
+    zlo = float(np.nanpercentile(zmass[sel_z], 0.5))
+    znorm = mcolors.Normalize(zlo if zlo > 0.15 * zhi else 0.0, zhi)
+    dzpos = max(float(np.nanpercentile(np.abs(zdT[sel_z]), 99.5)), 1e-6)
+    dznorm = mcolors.Normalize(-dzpos, dzpos)
+    for j, fi in enumerate(sel_z):
+        if _rad:
+            axs[0, j].pcolormesh(latz, plev, zdT[fi], cmap="RdBu_r",
+                                 norm=dznorm, shading="auto")
+            axs[0, j].set_title(f"day {fh[fi]/24:.1f}", fontsize=10)
+        axm = axs[nrow_z - 1, j]
+        axm.pcolormesh(latz, plev, zmass[fi], cmap="viridis", norm=znorm,
+                       shading="auto")
+        if not _rad:
+            axm.set_title(f"day {fh[fi]/24:.1f}", fontsize=10)
+        axm.set_xlabel("latitude [deg]")
+    for ax in axs.ravel():
+        ax.set_yscale("log")
+        ax.set_ylim(plev.max(), plev.min())        # pressure increases downward
+        ax.set_xlim(-90, 90)
+        ax.set_xticks([-60, -30, 0, 30, 60])
+        ax.grid(alpha=0.2, lw=0.4)
+    for r in range(nrow_z):
+        axs[r, 0].set_ylabel("pressure [hPa]")
+    if _rad:
+        fig.colorbar(plt.cm.ScalarMappable(cmap="RdBu_r", norm=dznorm),
+                     ax=list(axs[0]), fraction=0.02, pad=0.01, aspect=18,
+                     label="zonal-mean dT_rad [K]", extend="both")
+    fig.colorbar(plt.cm.ScalarMappable(cmap="viridis", norm=znorm),
+                 ax=list(axs[nrow_z - 1]), fraction=0.02, pad=0.01, aspect=18,
+                 label="zonal-mean SO4 [$\\times 10^{-9}$ kg/kg]",
+                 extend="both" if znorm.vmin > 0 else "max")
+    save(fig, "crosssection", bbox_inches="tight")
 
 # =====================================================================
 # FIG 3 -- size-distribution evolution (dN/dlogDp) at the probe level

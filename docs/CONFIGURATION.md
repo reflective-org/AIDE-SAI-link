@@ -1,7 +1,10 @@
 # Configuration reference
 
 Every knob in this model is an environment variable. This page is the complete
-list; [`../README.md`](../README.md) carries the five you need for a first run.
+list; [`../README.md`](../README.md) carries the recipe you actually run — on the
+`advection-mip` branch that is the advection-only experiment
+(`DRIVER=coupling.py MICRO=off RAD=0 AER_SRC=fixed`, settling on or off), and the
+sections below marked *transport-only* are the ones it reaches.
 
 > **[`../MANIFEST.md`](../MANIFEST.md) is canonical for this tree.** It records
 > every default *and why it is what it is*. This page tells you what the knobs
@@ -20,12 +23,16 @@ Anything not listed in `run_prod.sh`'s own prefix block simply passes through
 from your environment — `AER_SRC=carma $REPO/run_prod.sh` works. The exception:
 
 > [!IMPORTANT]
-> `run_prod.sh` **hard-sets** `INIT_BIN=so4`, `STATE_CKPT=1`, `FRAME_EVERY=24`,
+> `run_prod.sh` **hard-sets** `INIT_BIN=so4`, `STATE_CKPT=1`,
 > `FAST_CELL_CAP=50000`, `ADV_VPOS=1`, `DEBUG=1`, `PROFILE=1`. Passing those on
 > the command line is silently ignored. Override them by editing the script, or
 > run `driver_fast.py` directly. The remaining launcher variables —
-> `N_HOURS`, `OUT_TAG`, `RESUME`, all `INJ_*`, `FAST_SORT`, `GPU`,
-> `CUDA_DRIVER_LIB`, `XLA_PYTHON_CLIENT_PREALLOCATE` — are overridable.
+> `N_HOURS`, `P_LO_HPA`, `P_HI_HPA`, `FRAME_EVERY`, `OUT_TAG`, `RESUME`, all
+> `INJ_*`, `FAST_SORT`, `GPU`, `CUDA_DRIVER_LIB`,
+> `XLA_PYTHON_CLIENT_PREALLOCATE` — are overridable. `FRAME_EVERY` became
+> overridable on 2026-08-14 and **must** be raised for runs much longer than 90
+> days: the whole frames history is rewritten at every frame, so I/O cost grows
+> as (frames)².
 
 The **Default** column below is the *effective* production default, i.e. what
 you get from `run_prod.sh`; where the bare `coupling.py` module default differs
@@ -36,30 +43,36 @@ it is noted.
 Most of this page is inert for any given run. Two things decide which part is
 live: **which entry point you launched** and **which options you switched on**.
 
-`run_prod.sh` execs `driver_fast.py`, which imports `coupling.py` and then
-*replaces* its microphysics with the batched `tomas_jax.fast` engine. So the
-per-cell chain's own microphysics knobs are never reached on the production
-path — the `FAST_*` ones take their place. Everything else (injection, run
-length, domain, IC/BC, transport, settling, radiation) is shared, because both
-paths run the same code for it.
+`run_prod.sh` execs whatever `DRIVER` names, `driver_fast.py` by default, which
+imports `coupling.py` and then *replaces* its microphysics with the batched
+`tomas_jax.fast` engine. So the per-cell chain's own microphysics knobs are never
+reached on the production path — the `FAST_*` ones take their place. Everything
+else (injection, run length, domain, IC/BC, transport, settling, radiation) is
+shared, because both paths run the same code for it.
 
 | you launched | microphysics knobs that are live | the ones that do nothing |
 |---|---|---|
 | `run_prod.sh` or `python3 driver_fast.py` — **the normal case** | `ALPHA_COND`, `FAST_DT`, `FAST_CELL_CAP`, `FAST_SORT`, `FAST_FN_SCALE`, `FAST_COAG_SUB_CAP`, `FAST_COND_SUB_CAP`, `FAST_COAG_CMAX` | `MICRO_SUBSTEPS`, `N_COAG_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, all `NUC_*` |
-| `python3 coupling.py` — standalone/dev only | `MICRO_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, `ALPHA_COND`, `NUC_ORG`, `NUC_NH3`, `NUC_FION`, `NUC_FN_MAX` | every `FAST_*` |
+| `DRIVER=coupling.py run_prod.sh`, or `python3 coupling.py` — the standalone chain, and **the only path that runs `MICRO=off`** | `MICRO_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, `ALPHA_COND`, `NUC_ORG`, `NUC_NH3`, `NUC_FION`, `NUC_FN_MAX` | every `FAST_*` |
+
+At `MICRO=off` — the advection-only experiment — *neither* column is live: there
+is no microphysics call for any of it to configure.
 
 The two engines also differ *physically*, not just in speed: the fast engine's
 nucleation is **binary** (H2SO4–H2O only), which is why it has no `NUC_ORG` /
 `NUC_NH3` / `NUC_FION` to set — `FAST_FN_SCALE` is its only nucleation dial.
 
-Rows below marked **[chain]** are read only by the standalone `coupling.py`
-path and are ignored under `run_prod.sh`.
+Rows below marked **[chain]** are read only by the per-cell `coupling.py` engine
+— i.e. ignored whenever `driver_fast.py` is the driver, which is `run_prod.sh`'s
+default but not what `DRIVER=coupling.py` selects.
 
-Beyond the entry point, four switches gate whole blocks of knobs:
+Beyond the entry point, these switches gate whole blocks of knobs:
 
 | switch | at this setting | these stop mattering |
 |---|---|---|
 | `AER_SRC` | `mam4` (the default) | all `CARMA_*`, and `CARMA_FILE` |
+| `AER_SRC` | `fixed` | all `CARMA_*`, `INIT_BIN`, `INIT_SIGMA` — no CESM aerosol is read at all. The `FIXED_*` knobs take their place |
+| `MICRO` | `off` | every microphysics knob, `FAST_*` included, plus `ALPHA_COND`, all `NUC_*` and all `OH_*` — the bins become independent passive tracers |
 | `RAD` | `0` | the whole Radiation section, and `RRTMGP_PATH` |
 | `SETTLE` | `0` | `WET_SETTLING` |
 | `INJ_SO2_TG_YR` / `INJ_H2SO4_TG_YR` | both `0` (a control run) | the geometry knobs `INJ_HPA`, `INJ_LAT`, `INJ_LON`, `INJ_ZONAL`, `INJ_MIRROR` |
@@ -84,6 +97,7 @@ line, they are not read back.
 
 | variable | default | meaning |
 |---|---|---|
+| `DRIVER` | `driver_fast.py` | which entry point `run_prod.sh` execs, from its own tree. **`coupling.py` is required at `MICRO=off`** — the fast driver *is* a microphysics engine and exits when there is none to run. One launcher either way, so the GPU pin, libcuda path, memory policy and repo-as-`$PWD` guard cannot drift between the two |
 | `N_HOURS` | `2160` | forcing hours to integrate (module: `24*N_DAYS` = 48) |
 | `N_DAYS` | `2` | fallback that supplies `N_HOURS` when it is unset |
 | `H0` | `0` | start hour index into the CESM h1 series |
@@ -91,7 +105,7 @@ line, they are not read back.
 | `OUT_TAG` | `prod90d` | names every output file (module: `<N_DAYS>day`; `driver_fast.py` alone: `tomas_fast`) |
 | `RESUME` | `0` | `1` = continue from `coupled_state_<TAG>_ckpt.npz` |
 | `STATE_CKPT` | `1` | write the restart checkpoint (~400 MB, atomic, overwritten in place) |
-| `FRAME_EVERY` | `24` | hours between frame + checkpoint writes |
+| `FRAME_EVERY` | `24` | hours between frame + checkpoint writes. Raise it for long runs: the whole frames history is rewritten every time, so I/O cost grows as (frames)² — `120` for multi-year |
 | `LOG_EVERY` | `1` | progress line every N hours |
 | `PROBE_HPA` | `50` | level [hPa] used for frames and probe diagnostics |
 | `DIAG_CORE_HPA` | *(unset)* | `lo,hi` diagnostic core window; unset = symmetric −1 level per end (1.6–121.5 hPa) |
@@ -118,21 +132,22 @@ A variable that is *set but points nowhere* is an error, not a silent fallback.
 
 | variable | default | meaning |
 |---|---|---|
-| `P_LO_HPA` | `1.0` | top of the band [hPa] |
-| `P_HI_HPA` | `150.0` | bottom of the band [hPa] (module: `100.0`; `driver_fast.py` sets 150). 1–150 hPa = 24 native levels, 1,327,104 cells |
+| `P_LO_HPA` | `1.0` | top of the band [hPa]. The advection-only runs use **`0.03`** (33 levels): at 1 hPa, 6.9% of the domain's air descends through the top face per 90 days carrying `q=0`, which dilutes without appearing in any mass term — see MANIFEST |
+| `P_HI_HPA` | `150.0` | bottom of the band [hPa] (module: `100.0`; `driver_fast.py` sets 150). 1–150 hPa = 24 native levels, 1,327,104 cells; the floor lands on the 143 hPa level |
 | `N_LEV` | `0` | `0` = every level in the band; else sub-sample to ~N levels |
-| `N_BINS` | `0` | `0` = tomas-jax default (40). `driver_fast.py` accepts only `0` or `40` — the fast engine is hard-fixed at 40 |
+| `N_BINS` | `0` | `0` = tomas-jax default (40); a smaller value keeps the same physical size range, just coarser. `driver_fast.py` accepts only `0` or `40` — the fast engine is hard-fixed at 40. **`1` is valid only at `MICRO=off` *and* `SETTLE=0`**, where the bins are identical passive tracers; with settling on it collapses the fall-speed spectrum, and with one bin `Dp(M/N)` in the log is meaningless |
 
 ## Initial and boundary conditions
 
 | variable | default | meaning |
 |---|---|---|
-| `AER_SRC` | `mam4` | aerosol IC/BC/reservoir source: `mam4` (per-step dynamic from the hourly h1) or `carma` (static, only ~1 week of output exists). Gases are always CESM-forced |
+| `AER_SRC` | `mam4` | aerosol IC/BC/reservoir source: `mam4` (per-step dynamic from the hourly h1), `carma` (static, only ~1 week of output exists), or `fixed` (a prescribed uniform, time-invariant PSD — no CESM aerosol at all; the *transport-only* source, see below). Gases are always CESM-forced |
 | `INIT_BIN` | `so4` | bin MAM4 by `so4_a*` mass. `dgnum` is the legacy path that inflated sulfate mass 4.29× |
 | `INIT_SIGMA` | *(unset)* | `s1,s2,s3` mode widths; unset = physical MAM4 widths |
 | `BC_EDGE` | `open` | vertical faces: real flux boundaries. Derived — `clamp` when `ADV_WCONT=0` |
 | `BC_GAS` | `flux` | SO2/H2SO4 edge treatment. **Derived from the resolved `BC_EDGE`** so gas and aerosol cannot desync. `clamp` reproduces pre-2026-07-30 runs |
 | `BC_BOT_AER` | `1.0` | scale on the aerosol concentration flowing in through the bottom face (`0.0` = aerosol-free upwelling). Gases unaffected |
+| `BC_TOP_AER` | `1.0` | the same, for the top face. `0.0` = aerosol-free air descending in. **Both at `0.0` is the advection-only setting**: nothing is re-injected, so the band drains and the burden is a closed budget minus what leaves. Outflow is always free either way |
 | `N_BC_TOP` | `1` | top band levels pinned to hourly MAM4 |
 | `N_BC_BOT` | `1` | bottom band levels pinned to hourly MAM4 |
 | `CARMA_FRAME` | `0` | time index into the CARMA file (48 frames) |
@@ -140,6 +155,38 @@ A variable that is *set but points nowhere* is an error, not a silent fallback.
 | `CARMA_SUBBIN` | `1` | sub-bin CARMA onto the TOMAS grid; `0` reproduces the pre-2026-07-26 "comb" |
 
 More detail: [BOUNDARY_CONDITIONS.md](./BOUNDARY_CONDITIONS.md).
+
+### Prescribed fixed PSD (`AER_SRC=fixed`) — *transport-only*
+
+One particle size distribution, identical in every cell of the band and constant
+in time, advected and settled with no microphysics and no radiation. Read only
+when `AER_SRC=fixed`, and stamped into every output `.npz` so a file states the
+PSD it was run with. A uniform mixing ratio is an **exact steady state of the
+advection operator alone**, which is what makes every departure attributable —
+see MANIFEST for why, and why the absolute scale does not matter.
+
+| variable | default | meaning |
+|---|---|---|
+| `FIXED_PSD` | `lognormal` | `lognormal` = `FIXED_N` spread over the bins by a lognormal in ln(D), through the same `bin_mode_dgnum` kernel the MAM4 path uses. `flat` = `FIXED_N`/NBINS in **every** bin — deliberately unphysical, for the drainage-vs-size curve |
+| `FIXED_N` | `1.0e8` | total number mixing ratio over all bins [#/kg]. Scale-free: with no microphysics the system is linear in the aerosol. ~8 #/cm³ at 50 hPa/210 K |
+| `FIXED_DG_NM` | `200.0` | number-median **dry** diameter [nm]. The knob that matters — settling goes as D² |
+| `FIXED_SIGMA` | `1.6` | geometric width of the `lognormal` shape |
+| `FIXED_P_LO_HPA` | `0.0` | top of the pressure window the background is placed in [hPa], intersected with the band |
+| `FIXED_P_HI_HPA` | `1e9` | bottom of that window [hPa]; the default pair = the whole band. Narrowing it (e.g. `FIXED_P_HI_HPA=30`) starts the run with a real vertical gradient for the winds to act on **immediately**, instead of one settling has to create first — under a uniform IC the winds only enter at second order in time |
+| `FIXED_LAT_MAX_DEG` | `91.0` | latitude half-width of the window; `91` = every row. Set it (with the pressure window) to make the run a **tagged pulse** instead of a drainage run — `run_pulse_bdc.sh` uses `15` |
+
+The window narrows the **face-inflow reservoir** as well, since both come from
+`aer_fill`. That is only safe because `BC_TOP_AER`/`BC_BOT_AER` scale it
+afterwards: with both `0` the faces carry no aerosol either way. With
+`BC_*_AER != 0` a windowed reservoir means "aerosol-free inflow outside the
+window", a different boundary condition from the uniform run's — say so if you
+use that combination.
+
+A window that selects no level of the band is an error, not an empty run. The
+run header echoes `==> TRANSPORT-ONLY run` only when microphysics, radiation,
+injection and the CESM aerosol source are *all* off, and names whatever is still
+active otherwise — `AER_SRC=fixed` with radiation on is a legitimate run, but it
+is not the comparison experiment, and the output files look identical.
 
 ## Transport
 
@@ -157,15 +204,16 @@ More detail: [BOUNDARY_CONDITIONS.md](./BOUNDARY_CONDITIONS.md).
 
 ## Microphysics and settling
 
-Under `run_prod.sh` only `MICRO`, `ALPHA_COND`, `SETTLE` and `WET_SETTLING` are
-live here; the **[chain]** rows are the standalone `coupling.py` engine's and
-are ignored. Their fast-engine counterparts are in the next section.
+Under `run_prod.sh` with its default driver only `MICRO`, `ALPHA_COND`, `SETTLE`
+and `WET_SETTLING` are live here; the **[chain]** rows are the per-cell
+`coupling.py` engine's and are ignored. Their fast-engine counterparts are in the
+next section. At `MICRO=off` only `SETTLE` and `WET_SETTLING` do anything at all.
 
 | variable | default | meaning |
 |---|---|---|
-| `MICRO` | `full` | `full` = chemistry + nucleation + coagulation + condensation. `coag` = legacy coagulation only. `driver_fast.py` requires `full` |
+| `MICRO` | `full` | `full` = chemistry + nucleation + coagulation + condensation. `coag` = legacy coagulation only. `off` = **advect (+ settle) only**: the bins become independent passive tracers and every knob in this section but `SETTLE`/`WET_SETTLING` goes inert. `driver_fast.py` requires `full` — use `DRIVER=coupling.py` for `off` |
 | `ALPHA_COND` | `1.0` | H2SO4 accommodation (sticking) coefficient — the fraction of vapour–particle collisions that actually condense. `1.0` = every collision sticks, the fastest condensation physically allowed. **Read by both engines** |
-| `SETTLE` | `1` | gravitational settling, the model's only true aerosol sink |
+| `SETTLE` | `1` | gravitational settling. With the faces serving a reservoir it is the model's only true aerosol sink; with them aerosol-free (`BC_*_AER=0`) it is one of two channels out, the advective flux through the same face being the other |
 | `WET_SETTLING` | `1` | size the settling particle as the wet H2SO4/H2O droplet; `0` restores dry-core sizing. Ignored when `SETTLE=0` |
 | `MICRO_SUBSTEPS` | `6` | **[chain]** substeps per coupling step (1 h each); an accuracy dial, not a stability requirement. The fast engine uses `FAST_DT` instead |
 | `COAG_MAX_SUBSTEPS` | `256` | **[chain]** ceiling on the *adaptive* coagulation solver's substeps. A speed knob: the vmapped `while_loop` runs every lane to the slowest one. A cell that hits the cap is returned **partially integrated** and logs a `coag substep cap hit` warning |

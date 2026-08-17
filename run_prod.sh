@@ -38,6 +38,12 @@
 #                       This run is therefore NOT comparable to the 2026-07-29
 #                       prod90d, which is mid-trajectory on BC_GAS=clamp.
 #   FRAME_EVERY=24      probe-level frame + full 3-D state checkpoint every 24 h.
+#                       OVERRIDABLE as of 2026-08-14, and it has to be for any run
+#                       much longer than 90 days: the whole frames history is
+#                       REWRITTEN at every frame, so cost grows as (frames)^2. A
+#                       2-year run at 24 h would write ~40 GB of frames and spend
+#                       hours re-serialising them; FRAME_EVERY=120 makes the same
+#                       run 147 frames and ~8 GB.
 #   STATE_CKPT=1        set explicitly below; enables RESUME=1 restart.
 #   MICRO               tomas_jax.fast.run_fast, 60 inner steps x 360 s. ~20x
 #                       faster than physical TOMAS and stable, but its nucleation
@@ -294,7 +300,7 @@ INJ_ZONAL=${INJ_ZONAL:-1} \
 INJ_MIRROR=${INJ_MIRROR:-0} \
 INIT_BIN=so4 \
 STATE_CKPT=1 \
-FRAME_EVERY=24 \
+FRAME_EVERY=${FRAME_EVERY:-24} \
 FAST_SORT=${FAST_SORT:-1} \
 FAST_CELL_CAP=50000 \
 ADV_VPOS=1 \

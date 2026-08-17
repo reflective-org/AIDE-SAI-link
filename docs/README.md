@@ -5,6 +5,13 @@
 > behind the grid, the MAM4 initialization and the open boundaries — the parts
 > that have not changed. Where it disagrees with MANIFEST, MANIFEST is current.
 > Numbers here were re-checked against the tree on 2026-08-12.
+>
+> **This page describes the fully coupled model.** The `advection-mip` branch runs
+> a reduced configuration of the same code — transport (± settling) of a prescribed
+> uniform PSD, `MICRO=off RAD=0 AER_SRC=fixed`, on a 0.03–150 hPa domain — for which
+> `../README.md` is the operating manual. The grid, pressure-convention and
+> transport items below apply to it unchanged; the microphysics, two-moment-clip
+> and radiation parts never execute.
 
 Combines flux-form advection with the sectional microphysics from `../tomas-jax`,
 driven **one-way** by CESM meteorology — one-way meaning *to CESM*: the winds are
@@ -30,8 +37,9 @@ CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (Lin-Rood fl
 | `fct_core.py`  | Legacy sealed-face PPM/FCT transport (from `fct.py`). **Not on the run path** as of 2026-08-03; kept only for the bit-identical legacy check in `validation/test_conservation.py`. |
 | `settling.py`  | Gravitational settling sink. |
 | `radiation.py` | RRTMGP + Mie optics. |
-| `plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
-| `gif_run.py`   | Animated versions of the filmstrip panels. |
+| `plot_run.py`  | Diagnostics: dashboard, filmstrip, zonal-mean cross-section, size distribution, and drainage (the advection-only comparison's figure, drawn only for runs carrying the `D_*` counters). (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
+| `gif_run.py`   | Animated versions of the filmstrip and cross-section panels. |
+| `run_pulse_bdc.sh`, `pulse_progress_abs.py`, `pulse_deep_branch.py` | the tagged-pulse Brewer-Dobson experiment and its two figures — transport-only, no CESM or GPU needed for the figures. See `../MANIFEST.md`. |
 
 ## State (what is tracked & advected)
 Two moments per size bin — no per-species aerosol chemistry:
@@ -57,6 +65,10 @@ model levels**, 1,327,104 cells). The band is set by `P_LO_HPA` / `P_HI_HPA`.
    mass (single fixed density). Number is conserved exactly; mass to ~2%.
    *Coarse-mode dust/sea-salt mass is not carried separately — only sulfate;
    all mass is lumped as one dry-mass moment.*
+   `AER_SRC=fixed` bypasses this step entirely and fills the band with one
+   prescribed lognormal instead — a uniform mixing ratio, which is an exact
+   steady state of the advection operator, and the point of doing so. See
+   `CONFIGURATION.md`.
 3. **Transport.** All 82 tracers advect together each step with the Lin-Rood
    flux-form scheme (`fct_lr.py`; the PPM + Zalesak-FCT `fct` core is the
    lineage), winds linearly interpolated across the step, CFL-limited vertical
@@ -153,7 +165,7 @@ N_DAYS=365 OUT_TAG=1yr python3 coupling.py
 | `OUT_TAG` | `<N_DAYS>day` | output filename tag |
 | `PROFILE` | — | print per-hour phase timing (read / advect / micro / bc+polar) |
 | `DEBUG` | — | print finiteness of num/mas after advect & micro (hour 0) |
-| `MICRO` | `full` | `full` = SO2 chem + nucleation + coag + condensation; `coag` = legacy coag-only |
+| `MICRO` | `full` | `full` = SO2 chem + nucleation + coag + condensation; `coag` = legacy coag-only; `off` = advect (+settle) only, bins become independent passive tracers |
 | `MICRO_SUBSTEPS` | 6 | full-micro substeps per coupling step (6 ⇒ 1 h pieces at `STEP_HOURS=6`) |
 | `INJ_SO2_TG_YR` | **0** | SAI SO2 injection rate [Tg/yr]. Default dropped from 10 to 0 on 2026-08-03 so a forgotten flag gives an obviously unforced baseline; pass `=10` to reproduce prod90d/prod1yr |
 | `INJ_LAT` / `INJ_LON` / `INJ_HPA` | 0 / 180 / 55 | injection cell (nearest grid point / level) |
@@ -165,7 +177,9 @@ N_DAYS=365 OUT_TAG=1yr python3 coupling.py
 ## Outputs
 - `coupled_final_<tag>.npz` — final `num`, `mas`, grid metadata.
 - `coupled_timeseries_<tag>.npz` — burdens, mean Dp, sub-step counts vs time.
-- `coupled_frames_<tag>.npz` — daily probe-level (~50 hPa) size-bin snapshots.
+- `coupled_frames_<tag>.npz` — snapshots every `FRAME_EVERY` hours: probe-level
+  (~50 hPa) size-bin fields, plus column integrals and zonal-mean lat–height
+  cross-sections of the same fields. Full key list: `COUPLING_VARIABLES.md` §8.
 - `coupled_state_<tag>_ckpt.npz` — full 3-D state + cumulative counters, written
   last in each checkpoint block; this is what `RESUME=1` reads.
 
