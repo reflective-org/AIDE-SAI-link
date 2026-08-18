@@ -127,8 +127,11 @@ def wet_size(mmid_kg, wt_pct, rho_dry, mw_h2so4=98.0, mw_so4=96.0):
     """
     m = jnp.asarray(mmid_kg, dtype=jnp.float64)
     wt = jnp.asarray(wt_pct, dtype=jnp.float64)
+    #SO4 mass to H2SO4 mass
     acid = m * (mw_h2so4 / mw_so4)
+    #weight of water per particle, from Tabazadeh et al. 1997 eq. 1
     m_h2o = acid * (100.0 / wt - 1.0)
+    ## total wet mass per particle (slight issue as water is derived from acid but added to SO4 mass, not acid (2% error))
     m_tot = m + m_h2o                                  # raw SO4 + H2O
     x = 100.0 * acid / m_tot                           # Tang's argument
     rho = tang_density(x)

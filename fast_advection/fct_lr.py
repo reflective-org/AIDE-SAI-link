@@ -53,8 +53,12 @@ from fct_fast import (RAD, DEG, grid_metric, _ppm_coeffs_per, _ppm_coeffs_nonper
 
 # ---- PPM sliver means -----------------------------------------------------
 # The mean of the reconstruction over the sliver that crosses a face in one step.
-# flux = cf * sliver_mean. fct_fast computes this inline; here it is factored out
+# flux = cf * sliver_mean (cf = courant fraction at each face). fct_fast computes this inline; here it is factored out
 # because the air field and the tracer field both need it against the SAME cf.
+
+""""hi = "PPM says the departing slab has this concentration" (3rd-order accurate, but can overshoot near sharp gradients like your injection plume), 
+and lo = "just use the whole donor cell's mean" (1st-order upwind: diffusive, but guaranteed bounded). 
+Multiply either by cf·m and you have a flux; Zalesak later blends toward hi as far as boundedness allows"""
 def _sliver(q, cf, periodic):
     """(hi, lo) upwind sliver means at each RIGHT face. lo = donor-cell value."""
     if periodic:
@@ -70,6 +74,7 @@ def _sliver(q, cf, periodic):
     f_neg = sh(qL) + 0.5*a*(sh(dq) + sh(q6)*(1 - (2/3)*a))
     hi = jnp.where(cf >= 0, f_pos, f_neg)
     lo = jnp.where(cf >= 0, q, sh(q))
+    #average mixing ratio inside the slab that will cross that face this step 
     return hi, lo
 
 
@@ -86,6 +91,7 @@ def _lr_sweep(rho, rhoq, cf, periodic, mf=None, ac=None):
     Returns (rho', rhoq'). The tracer flux rides on the AIR flux, so a uniform
     mixing ratio is preserved exactly while sum(ac*rho*q) is conserved to
     roundoff -- independent of how divergent cf is."""
+    #m is the length of the face and a is the cell area
     m = 1.0 if mf is None else mf
     a = 1.0 if ac is None else ac
     if not periodic:
@@ -97,22 +103,34 @@ def _lr_sweep(rho, rhoq, cf, periodic, mf=None, ac=None):
     q = rhoq / rho
     #--- air flux (high order; rho is smooth and ~1 so PPM needs no limiting) ---
     rhi, _ = _sliver(rho, cf, periodic)
+    # the amount of air moving through the face..cf = distance air moves in one step
+    # Fa = (how far (in cell width)) x (how wide the face is) x (how much air is in the crossing slab) = cf * m * rhi
     Fa = cf * m * rhi
     Fa_l = _shift_left(Fa, periodic)
+    #discrete continuity: rho' = rho - div(F_air)/area, where div(F_air) = Fa - Fa_l
     rho_n = rho - (Fa - Fa_l) / a
 
     #--- tracer flux: the SAME air flux, weighted by the tracer sliver mean -----
+    #qhi = PPM sliver mean (3rd order, can overshoot at a plume edge);
+    #qlo = donor-cell mean (1st-order upwind: diffusive but always bounded)
     qhi, qlo = _sliver(q, cf, periodic)
+    # tracer flux is not computed independently, it's the air flux carrying the mixing ratio
+    # Fa = kg air, q = kg tracer / kg air, so Fa * q = kg tracer
     Ft_hi = Fa * qhi
     Ft_lo = Fa * qlo
     Ftlo_l = _shift_left(Ft_lo, periodic)
+    #Low-order (donor-cell) update
+    #summing over cells cancels every interior flux and leaves only the two domain
+    #edges: conservation, exact to roundoff, for any cf however divergent
     rhoq_lo = rhoq - (Ft_lo - Ftlo_l) / a
+    # back to mixing ratio units for the Zalesak limiter, where rho_n is the air-mass field after the sweep
     q_lo = rhoq_lo / rho_n
     #--- FCT: limit the antidiffusive tracer flux so q stays bounded ------------
     # increments are converted to q units by dividing by (area * rho'), which is
     # what _zalesak's `ac` argument does.
     A = Ft_hi - Ft_lo
     dq = _zalesak(q, q_lo, A, periodic=periodic, ac=a * rho_n)
+    #back to the conserved variable for the next sweep
     return rho_n, (q_lo + dq) * rho_n
 
 
@@ -132,10 +150,17 @@ def _lr_vert(rho, rhoq, dp, dt, w_face, bc_top=None, bc_bot=None):
     exchange in rho*q*Pa units."""
     ncol, nlev = rhoq.shape
     dt_ = rhoq.dtype
+    #Eulerian interface pressures: xe[k] = pressure at the top of cell k, so the
+    #vertical coordinate here is PRESSURE, increasing downward.
+    #say dp = [10,20,40] Pa, then xe = [0,10,30,70] Pa.
     xe = jnp.concatenate([jnp.zeros(1, dt_), jnp.cumsum(dp)]).astype(dt_)
 
     #departure pressure of each interface; open faces => do NOT clip in-domain
+    #w_face is omega (Pa/s) so w*dt is a pressure displacement
     xdep = jax.lax.cummax(xe[None, :] - w_face * dt, axis=1)
+    #m = which Eulerian cell each departure point lands in; s = fractional
+    #position within that cell, so (m, s) locates xdep on the subgrid.
+    #m = top of the cell and s = fraction of cell below the top
     m = jnp.clip(jnp.searchsorted(xe, xdep, side='right') - 1, 0, nlev - 1)
     s = jnp.clip((xdep - xe[m]) / dp[m], 0.0, 1.0)
 
@@ -143,6 +168,9 @@ def _lr_vert(rho, rhoq, dp, dt, w_face, bc_top=None, bc_bot=None):
         Mc = jnp.concatenate([jnp.zeros((ncol, 1), dt_),
                               jnp.cumsum(fld * dp[None, :], axis=1)], axis=1)
         qL, qR, dqc, q6 = _ppm_coeffs_nonper(fld)
+        #mass above the top of the cell + the partial but inside the cell
+        #using CW parabola integration
+        #cumulative tracer mass above departure point
         out = (jnp.take_along_axis(Mc, m, axis=1)
                + dp[m] * (jnp.take_along_axis(qL, m, axis=1) * s
                           + 0.5 * jnp.take_along_axis(dqc, m, axis=1) * s * s
@@ -154,10 +182,15 @@ def _lr_vert(rho, rhoq, dp, dt, w_face, bc_top=None, bc_bot=None):
         qb = fld[:, -1:] if bc is None else bc[1][:, None]
         out = jnp.where(xdep < xe[0],  Mc[:, :1]  - qt * (xe[0] - xdep), out)
         out = jnp.where(xdep > xe[-1], Mc[:, -1:] + qb * (xdep - xe[-1]), out)
+        # out is the new state and Mc is the old state, 
+        # so the difference is the net flux into the slab across each interface
         return Mc, out
 
+    #air mass
     Mc_r, Mr = M_at(rho, None)                      # air inflow at rho=edge value
+    #tracer mass
     Mc_t, Mt = M_at(rhoq, bc_top if bc_top is None else (bc_top, bc_bot))
+    #mass in the slab arriving in each cell, divided by thickness
     rho_n = (Mr[:, 1:] - Mr[:, :-1]) / dp[None, :]
     rhoq_n = (Mt[:, 1:] - Mt[:, :-1]) / dp[None, :]
     f_top = Mc_t[:, 0] - Mt[:, 0]                   # >0 = inflow through the top
@@ -228,7 +261,22 @@ def _vert_positive(rhoq, rhoq_n, Mc_t, Mt, dp):
     """Rescale the vertical interface fluxes so no cell goes negative.
 
     Conservative: only the shared face fluxes are scaled. Returns
-    (rhoq_n_limited, f_top, f_bot) with the boundary fluxes consistent."""
+    (rhoq_n_limited, f_top, f_bot) with the boundary fluxes consistent.
+    
+    Before:
+    cell0: 1 + (0 − 3)    = −2   ← negative
+    cell1: 2 + (3 − (−1)) =  6
+    cell2: 5 + (−1 − 0)   =  4
+
+    After:
+    cell0: −2 + (0 − (−2)) = 0
+    cell1:  6 + (−2 − 0)   = 4
+    cell2:  4 + (0 − 0)    = 4
+
+
+
+    """
+    #Rebuild the interface fluxes
     F = Mc_t - Mt                                  # (ncol, nlev+1) net flux in
     avail = jnp.maximum(rhoq, 0.0) * dp[None, :]    # tracer available to drain
     # outflow demanded from cell k: F_k<0 drains it, F_{k+1}>0 drains it
@@ -258,6 +306,7 @@ def _vert_positive(rhoq, rhoq_n, Mc_t, Mt, dp):
     # opposite signs to the two cells it joins, so it telescopes.
     dF = F * (s - 1.0)
     rhoq_l = rhoq_n + (dF[:, :-1] - dF[:, 1:]) / dp[None, :]
+    # corrected tracers and new fluxes
     return rhoq_l, F[:, 0] + dF[:, 0], F[:, -1] + dF[:, -1]
 
 
@@ -277,6 +326,8 @@ def _lr_step_3d(rho, rhoq, u, v, w, dt, lat, dp, polar, qfroz, mf, ac,
     # of CELL CONTENTS, which is only mass-preserving for the advective form. In
     # flux form the fluxes must be the real ones, so we rely on substepping to
     # keep |cx| < 1 in the resolved rows and on the cap stirring at the poles.
+    # average u to the cell right face (uf) and compute the courant number cx for the longitude sweep (convert to meteres)
+    # expand shape for cx to (1,nlat,1) for broadcasting as cx is used in ffsl_x which expects (nlev*nlat,nlon)
     uf = 0.5*(u + jnp.roll(u, -1, 2))
     cx = uf * dt / (RAD * jnp.cos(lat*DEG) * dlam)[None, :, None]
     #inside the caps the row is uniform, so clamp the (meaningless, ~1e18) cx
@@ -316,12 +367,26 @@ def _lr_step_batch(rho, rhoqb, u, v, w, dt, lat, dp, polar, qfrozb,
     """rho is SHARED by every tracer (it is the air), so it is advected once and
     the per-tracer sweeps reuse it. Air flux therefore cannot disagree between
     tracers -- which is what keeps every tracer's budget closed by the same
-    amount."""
+    amount.
+    
+ 
+    Computes the continuity-derived vertical velocity once, then vmaps the full 
+    3-D step over the tracer stack with all tracers sharing the same air field 
+    and winds, keeping one copy of the resulting rho
+    
+    omega_{k+1/2} = omega_{k-1/2} - dp_k * (Sx + Sy)_k
+
+    Continuity holds in the atmosphere, and it held in CESM. It breaks in the handoff
+    due to potential regridding, temporal sampling, and surface pressure tendencies.
+    """
+
+
     w_face = _omega_continuity(u, v, w, lat, dp, polar, mf, ac, dlam, dphi)
     one = lambda rq, qf: _lr_step_3d(rho, rq, u, v, w, dt, lat, dp, polar, qf,
                                      mf, ac, pol_mode, dlam, dphi, w_face)
     rho_n, rhoq_n, vfl = jax.vmap(one, in_axes=(0, 0))(rhoqb, qfrozb)
     #every tracer advected the same air, so the rho copies are identical; keep one
+    # air field, tracer fields, and the vertical fluxes returned
     return rho_n[0], rhoq_n, vfl
 
 
@@ -331,9 +396,11 @@ def _lr_loop(rho, rhoqb, u0, v0, w0, u1, v1, w1, dt_sub, n, lat, dp, polar,
     def body(i, carry):
         rho_, rq_, vf_ = carry
         a = (i.astype(u0.dtype) + 0.5) / n
+        ## wind interpolation
         u = (1.0 - a)*u0 + a*u1
         v = (1.0 - a)*v0 + a*v1
         w = (1.0 - a)*w0 + a*w1
+        #advance current air and tracer state by one substep
         rho_, rq_, vfs = _lr_step_batch(rho_, rq_, u, v, w, dt_sub, lat, dp,
                                         polar, qfrozb, mf, ac, pol_mode,
                                         dlam, dphi)

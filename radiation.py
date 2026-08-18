@@ -126,6 +126,7 @@ _WT_DGRID = float(WT_GRID[1] - WT_GRID[0])       # uniform 5 wt% spacing
 _RI_WT = np.array([25.0, 38.0, 50.0, 75.0, 84.5, 95.6])
 _RI_COL = np.array([2, 3, 4, 5, 6, 7])
 
+##the water fraction is whatever the local thermodynamics says!!!!!!!!!!! same with settling, both a function of RH
 
 def refindex_at_wt(wt_pct, path=RI_FILE):
     """(wl_um, n, k) for an H2SO4 solution of wt_pct, linearly interpolated
@@ -171,7 +172,7 @@ def _load_refindex_all(path=RI_FILE):
 
 def load_h2so4_refindex(path=RI_FILE, wt_col=5):
     """
-    The refractive index of sulfuric acid tells you how those droplets interact iwth light
+    The refractive index of sulfuric acid tells you how those droplets interact with light
     75% weight is the equilibrium composition of H2SO4 in the stratosphere, so we use that for the Mie calculations (75% of droplet weight is sulfuric acid, 25% is water).
     
     Parse the HITRAN palmer_williams_h2so4.dat file.
@@ -315,7 +316,8 @@ def wt_weights(wt_pct, wt_grid=WT_GRID, dwt=_WT_DGRID):
 
 def mie_at_wavelength(dp_bin_m, wl_um, ri_path=RI_FILE, wt_pct=75.0):
     """(sigma_ext, sigma_sca) per bin at a single wavelength (diagnostics).
-    Similar to function above but only evaluates at one wavelength, so no quadrature or band averaging."""
+    Similar to function above but only evaluates at one wavelength, so no quadrature or band averaging.
+    Production path never uses this default wt_pct"""
     wl_tab, n_tab, k_tab = refindex_at_wt(wt_pct, ri_path)
     #interpolate n and k at one wavelength
     n = np.interp(wl_um, wl_tab, n_tab); k = np.interp(wl_um, wl_tab, k_tab)
@@ -355,6 +357,7 @@ def _aerosol_props_wet(num_mr, dp_pa, sigma_ext, ssa, g, wwt):
 
     sigma_ext/ssa/g : (n_wt, NBINS, n_bnd) tables from build_wet_mie_tables
     wwt             : (n_wt, nzb, nlat, nlon) linear weights over WT_GRID
+    *g_f             : (n_bnd, nzb, nlat, nlon) extinction-weighted asymmetry factor
 
     Mathematically identical to evaluating each cell's own interpolated Mie
     table, but accumulated as n_wt einsums so nothing of size
