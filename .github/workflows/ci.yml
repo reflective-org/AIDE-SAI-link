@@ -1,4 +1,4 @@
-# CI for aide_sai_core.
+# CI for AIDE-SAI-link.
 #
 # WHAT THIS CAN AND CANNOT COVER. GitHub's runners have no GPU and not the ~23 TB
 # CESM archive, so the physics validation does not run here -- of the five

@@ -1,7 +1,7 @@
 # This CITATION.cff file was generated with cffinit.
 # Visit https://bit.ly/cffinit to generate yours today!
 cff-version: 1.2.0
-title: 'aide_sai_core: a CESM-forced TOMAS-JAX sectional aerosol model with interactive aerosol-radiation-microphysics coupling for stratospheric aerosol injection'
+title: 'AIDE-SAI-link: a CESM-forced TOMAS-JAX sectional aerosol model with interactive aerosol-radiation-microphysics coupling for stratospheric aerosol injection'
 abstract: >-
   A GPU (JAX) sectional stratospheric aerosol model forced by prescribed CESM
   meteorology. Carries 40 TOMAS size bins in two moments plus SO2 and H2SO4,
@@ -25,7 +25,7 @@ authors:
     post-code: '94105'
     website: 'https://www.reflective.org'
     email: media@reflective.org
-repository-code: 'https://github.com/reflective-org/aide_sai_core'
+repository-code: 'https://github.com/reflective-org/AIDE-SAI-link'
 keywords:
   - stratospheric aerosol injection
   - solar radiation modification

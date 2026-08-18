@@ -1,6 +1,6 @@
-# aide_sai_core
+# AIDE-SAI-link
 
-[![CI](https://github.com/reflective-org/aide_sai_core/actions/workflows/ci.yml/badge.svg)](https://github.com/reflective-org/aide_sai_core/actions/workflows/ci.yml)
+[![CI](https://github.com/reflective-org/AIDE-SAI-link/actions/workflows/ci.yml/badge.svg)](https://github.com/reflective-org/AIDE-SAI-link/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](./LICENSE)
 
@@ -87,16 +87,16 @@ Neither is a plain clone of its default branch:
   needed for any `RAD=1` run.
 
 ```bash
-git clone https://github.com/reflective-org/aide_sai_core.git
+git clone https://github.com/reflective-org/AIDE-SAI-link.git
 
 # microphysics -- the gpu-fast branch, not main
 git clone -b gpu-fast https://github.com/reflective-org/tomas-jax
 
 # radiation -- clone, then apply the zenith patch shipped with this repo
 git clone https://github.com/climate-analytics-lab/jax-rrtmgp
-git -C jax-rrtmgp apply ../aide_sai_core/patches/jax-rrtmgp-zenith.patch
+git -C jax-rrtmgp apply ../AIDE-SAI-link/patches/jax-rrtmgp-zenith.patch
 
-pip install -r aide_sai_core/requirements.txt
+pip install -r AIDE-SAI-link/requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"   # GPU wheel -- the CPU one cannot do production
 ```
 
@@ -114,7 +114,7 @@ line needs the script that follows it:
 ```bash
 # wherever you cloned it -- $PWD if you are standing where the block above ran.
 # The siblings are located relative to this, so it does not have to be $HOME.
-REPO=$PWD/aide_sai_core
+REPO=$PWD/AIDE-SAI-link
 export LD_LIBRARY_PATH=/run/nvidia/driver/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 # 1. zenith patch applied? mu_2d exists only after it
@@ -171,7 +171,7 @@ the working directory, so that directory is where the run lands — and a single
 itself as the working directory rather than let that happen silently.
 
 ```bash
-REPO=$PWD/aide_sai_core            # wherever this clone lives -- must be ABSOLUTE, the next line cd's away
+REPO=$PWD/AIDE-SAI-link            # wherever this clone lives -- must be ABSOLUTE, the next line cd's away
 RUNS=$PWD/sai_runs                 # anywhere BUT the repo
 mkdir -p "$RUNS" && cd "$RUNS"
 

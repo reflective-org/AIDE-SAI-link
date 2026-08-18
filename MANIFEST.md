@@ -63,14 +63,14 @@ refuses to start with the repo as `$PWD`. Keep a runs directory outside the tree
 ## Setup from a fresh clone
 
 ```bash
-git clone https://github.com/reflective-org/aide_sai_core.git
+git clone https://github.com/reflective-org/AIDE-SAI-link.git
 git clone -b gpu-fast https://github.com/reflective-org/tomas-jax     # beside it -- found automatically
 git clone https://github.com/climate-analytics-lab/jax-rrtmgp         # ditto
-git -C jax-rrtmgp apply ../aide_sai_core/patches/jax-rrtmgp-zenith.patch  # required for RAD=1
-pip install -r aide_sai_core/requirements.txt
+git -C jax-rrtmgp apply ../AIDE-SAI-link/patches/jax-rrtmgp-zenith.patch  # required for RAD=1
+pip install -r AIDE-SAI-link/requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusable for production
 mkdir -p runs && cd runs                                     # outputs go OUTSIDE the repo
-N_HOURS=6 OUT_TAG=smoke ../aide_sai_core/run_prod.sh         # smoke test first
+N_HOURS=6 OUT_TAG=smoke ../AIDE-SAI-link/run_prod.sh         # smoke test first
 ```
 
 **Neither sibling repo is usable as a plain clone of its default branch**, and
@@ -116,7 +116,7 @@ runs the code you edited regardless of where you launched it.
 
 ```bash
 cd <runs dir>                                     # NOT the repo; outputs land here
-REPO=/path/to/aide_sai_core
+REPO=/path/to/AIDE-SAI-link
 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh   # the 10 Tg/yr scenario, 90 days, ~33 h
 $REPO/run_prod.sh                                    # NO-INJECTION control (INJ_SO2_TG_YR=0)
 RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh   # continue that scenario
