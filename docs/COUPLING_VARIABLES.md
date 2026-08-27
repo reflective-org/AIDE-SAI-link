@@ -198,4 +198,4 @@ outright, a physics-mode mismatch only warns. Both arrays are append-only, so
 adding a field must not lock out older checkpoints.
 
 Older runs may lack the newer keys (`prod90d`, for instance, predates
-`reff_nm`); `plot_run.py` degrades rather than failing when one is absent.
+`reff_nm`); `scripts/utils/plot_run.py` degrades rather than failing when one is absent.

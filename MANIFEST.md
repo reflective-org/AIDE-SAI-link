@@ -41,7 +41,7 @@ src/driver_fast.py          THE production entry point. Imports coupling.py and 
 src/advection/fct_core.py   legacy sealed-face advection. NOT on the run path --
                             coupling.py imports fct_lr directly, so standalone and
                             production use the same transport. Kept solely for the
-                            bit-identical legacy check in validation/test_conservation.py.
+                            bit-identical legacy check in scripts/validation/test_conservation.py.
 src/settling/settling.py    gravitational settling; also the canonical wet-droplet
                             sizing (tang_density/wet_size), which radiation.py imports
 src/radiation/radiation.py  RRTMGP + Mie optics
@@ -51,11 +51,11 @@ src/microphysics/tomas_fast.py  the tomas_jax.fast adapter (coupling state <-> F
 inputs/rad_data/            palmer_williams_h2so4.dat (Palmer & Williams 1975,
                             as distributed in HITRAN Aerosols-2016)
 src/run_prod.sh             the production launcher (self-documenting header)
-plot_run.py                 the three post-run figures (dashboard, filmstrip, size dist)
-gif_run.py                  animated versions of the filmstrip panels
+scripts/utils/plot_run.py   the three post-run figures (dashboard, filmstrip, size dist)
+scripts/utils/gif_run.py    animated versions of the filmstrip panels
 docs/                       CONFIGURATION (every env var), VALIDATION (the harnesses),
                             PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
-validation/                 harnesses -- see below
+scripts/validation/         harnesses -- see below
 .github/workflows/ci.yml    CI: the two self-contained tests + a ruff errors-only gate
 models/tomas-jax            SUBMODULE, pinned. Sectional microphysics (branch gpu-fast)
 models/jax-rrtmgp           SUBMODULE, pinned. Radiative transfer (needs patches/)
@@ -171,11 +171,11 @@ no submodules), exit non-zero on failure, and run in CI on every push:
 
 ```bash
 # advection conservation (the LR benchmark)
-python3 $REPO/validation/test_conservation.py
+python3 $REPO/scripts/validation/test_conservation.py
 
 # closed-form settling physics: Tang density, wet growth factor, fall speed,
 # and that the implicit sweep changes the burden only by its bottom outflow
-python3 $REPO/validation/test_physics_math.py
+python3 $REPO/scripts/validation/test_physics_math.py
 ```
 
 **Investigations** load a real run and print diagnostics for a human to read;
@@ -184,10 +184,10 @@ that is where they look for a checkpoint and where they write any figure:
 
 ```bash
 # where the number floor comes from, per bin / level / latitude
-STATE=path/to/coupled_state_<tag>_ckpt.npz python3 $REPO/validation/floor_anatomy.py
+STATE=path/to/coupled_state_<tag>_ckpt.npz python3 $REPO/scripts/validation/floor_anatomy.py
 
 # the ADV_VPOS positivity limiter: positivity, conservation, smooth-field inactivity
-python3 $REPO/validation/validate_vpos_f32.py
+python3 $REPO/scripts/validation/validate_vpos_f32.py
 ```
 
 **A change to advection confirmed only in float64 is not confirmed.** Two bugs

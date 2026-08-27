@@ -12,7 +12,10 @@ import numpy as np
 # SCRIPT's directory on sys.path, not the cwd, so without this the import fails
 # no matter where you launch from (it did, from the 2026-07-29 move until
 # 2026-07-30).
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# three dirnames: scripts/validation/<this file> -> scripts/validation ->
+# scripts -> the repo root. Was two until the 2026-08-27 move into scripts/.
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, 'src'))
 import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 

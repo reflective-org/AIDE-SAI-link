@@ -14,7 +14,7 @@ The distinction from `runs/`:
 | contents | `.npz` state, checkpoints, frames | figures, tables, summaries |
 | reproducible by | re-running the model (hours) | re-running a plot script (seconds) |
 
-`plot_run.py <TAG>` currently writes its dashboard/filmstrip/sizedist PNGs next
+`scripts/utils/plot_run.py <TAG>` currently writes its dashboard/filmstrip/sizedist PNGs next
 to the run data. Repointing the plotting and analysis scripts at this directory
 is part of the separate validation/plotting reorganisation — see
 `docs/DEFERRED.md`.

@@ -19,7 +19,10 @@ import matplotlib.pyplot as plt
 
 # coupling/radiation live in the repo root, one level up -- see the note in
 # test_radiation.py. sys.path[0] is this file's directory, not the cwd.
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# three dirnames: scripts/validation/<this file> -> scripts/validation ->
+# scripts -> the repo root. Was two until the 2026-08-27 move into scripts/.
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, 'src'))
 import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 

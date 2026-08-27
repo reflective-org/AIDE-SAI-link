@@ -44,9 +44,15 @@ Changed
   `runs/`. The old test was `$PWD == <script dir>`; from `src/` that would no
   longer have protected the repo root.
 
+- `scripts/` — everything that reads a run rather than producing one:
+  `scripts/validation/` (the six physics harnesses) and `scripts/utils/`
+  (`plot_run.py`, `gif_run.py`). `src/` now holds only what advances the coupled
+  state; a run depends on nothing in `scripts/`.
+
 Removed
 
 - `rad_data/` at the repo root (moved to `inputs/rad_data/`).
+- `validation/`, `plot_run.py`, `gif_run.py` at the repo root (moved to `scripts/`).
 - `fast_advection/` (moved to `src/advection/`).
 - `sai_runs/` beside the repo, and the loose `coupled_*prod1d*` artifacts in its
   parent directory (moved to `runs/smoke/` and `runs/prod1d/`; nothing deleted).

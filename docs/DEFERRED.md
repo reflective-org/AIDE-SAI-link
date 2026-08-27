@@ -25,15 +25,15 @@ being installed in the active environment, which introduces a stale-editable-
 install failure mode. The launcher was already rewritten once to stop running
 code from a path other than the one being edited; the same care applies here.
 
-## Relocate validation, plotting and benchmarking
+## Point the plotting scripts at `outputs/`
 
-**Status:** planned as a follow-up step.
+**Status:** deferred; `outputs/` exists and is documented but nothing writes there.
 
-`validation/`, `plot_run.py` and `gif_run.py` still sit at the repo root.
-`src/` now holds only what is needed to advance the coupled state, so these
-belong in a sibling directory of their own. The `outputs/` directory exists and
-is documented for their products, but nothing writes there yet — `plot_run.py`
-still emits its PNGs into the run directory.
+`scripts/utils/plot_run.py` still saves its dashboard/filmstrip/sizedist PNGs
+into `$PWD`, which is the run directory under `runs/<TAG>/`. That mixes derived
+products in with raw model output, which is the split `outputs/` was created to
+make. Deferred from the 2026-08-27 `scripts/` move so that move stayed a pure
+relocation with no behaviour change.
 
 ## Retire `fct_core.py`?
 
@@ -43,7 +43,7 @@ still emits its PNGs into the run directory.
 that it deliberately replaced it with `fct_lr` because reaching `fct_core` gave
 silently *different* transport (sealed vertical faces, no air-mass tracking)
 under identical diagnostics. The only remaining importer is
-`validation/test_conservation.py`, which loads it as a legacy reference to check
+`scripts/validation/test_conservation.py`, which loads it as a legacy reference to check
 the modern sweeps against.
 
 So it is not dead code exactly — it is a reference implementation with one

@@ -25,7 +25,10 @@ import numpy as np
 # did until 2026-07-30) put only validation/ on the path, so `import fct_fast`
 # died before a single test ran. Python puts the SCRIPT's directory on sys.path,
 # never the cwd, so launching from the repo root does not save it either.
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# three dirnames: scripts/validation/<this file> -> scripts/validation ->
+# scripts -> the repo root. Was two until the 2026-08-27 move into scripts/.
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, 'src'))
 import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 import jax.numpy as jnp
