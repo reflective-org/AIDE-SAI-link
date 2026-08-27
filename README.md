@@ -66,15 +66,16 @@ forcing source as work, not configuration.
 
 ## Installation
 
-Two dependencies are separate repos, not on PyPI. Clone them **beside** this one
-and they are found automatically; otherwise set `TOMAS_JAX_PATH` / `RRTMGP_PATH`:
+Two dependencies are separate repos, not on PyPI. They are **git submodules**
+under `models/`, pinned to exact commits so a clone reconstructs the code that
+produced a result; override either with `TOMAS_JAX_PATH` / `RRTMGP_PATH`:
 
-| repo | role | required state |
+| submodule | role | pinned at |
 |---|---|---|
-| [`reflective-org/tomas-jax`](https://github.com/reflective-org/tomas-jax) | sectional aerosol microphysics | branch **`gpu-fast`** — `main` has no `tomas_jax.fast` |
-| [`climate-analytics-lab/jax-rrtmgp`](https://github.com/climate-analytics-lab/jax-rrtmgp) | radiative transfer (`RAD=0` skips it) | `main`, **plus `patches/jax-rrtmgp-zenith.patch`** from this repo |
+| [`models/tomas-jax`](https://github.com/reflective-org/tomas-jax) | sectional aerosol microphysics | `787c991`, branch **`gpu-fast`** — `main` has no `tomas_jax.fast` |
+| [`models/jax-rrtmgp`](https://github.com/climate-analytics-lab/jax-rrtmgp) | radiative transfer (`RAD=0` skips it) | `99d2d71`, **plus `patches/jax-rrtmgp-zenith.patch`** from this repo |
 
-Neither is a plain clone of its default branch:
+Neither is a plain checkout of its default branch:
 
 * **tomas-jax must be on `gpu-fast`.** `driver_fast.py` — the production entry
   point — imports `tomas_jax.fast`, the batched reduced engine, which only
@@ -87,44 +88,55 @@ Neither is a plain clone of its default branch:
   needed for any `RAD=1` run.
 
 ```bash
-git clone https://github.com/reflective-org/AIDE-SAI-link.git
+git clone --recurse-submodules https://github.com/reflective-org/AIDE-SAI-link.git
+cd AIDE-SAI-link
 
-# microphysics -- the gpu-fast branch, not main
-git clone -b gpu-fast https://github.com/reflective-org/tomas-jax
+# the zenith patch is REQUIRED SETUP, not an optional extra -- see below
+git -C models/jax-rrtmgp apply ../../patches/jax-rrtmgp-zenith.patch
 
-# radiation -- clone, then apply the zenith patch shipped with this repo
-git clone https://github.com/climate-analytics-lab/jax-rrtmgp
-git -C jax-rrtmgp apply ../AIDE-SAI-link/patches/jax-rrtmgp-zenith.patch
-
-pip install -r AIDE-SAI-link/requirements.txt
+pip install -r requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"   # GPU wheel -- the CPU one cannot do production
 ```
 
-The patch was made against jax-rrtmgp v0.2.1 (`d7abe2e`); `git apply` fails
-loudly rather than half-applying if upstream has moved, in which case pin that
-tag. Do **not** activate the tomas-jax `.venv` — it is CPU-only jaxlib with no
-xarray. The working combination is system `python3` with the GPU jax wheel.
+In an existing clone, `git submodule update --init` populates `models/`.
+
+**Why the patch is a separate step.** A submodule records a commit, and the
+zenith fix is not in any upstream commit — so `git submodule update` checks out
+pristine jax-rrtmgp and drops it. That failure is silent, not loud: without the
+fix the shortwave solver mis-broadcasts a `(nlat, nlon, 1)` zenith field against
+the `(nlat, nlon)` TOA flux, which on a square grid computes nonsense rather
+than raising. Confirm it took:
+
+```bash
+grep -q mu_2d models/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py && echo "zenith patch applied"
+```
+
+The patch is generated against the pinned commit `99d2d71`; `git apply` fails
+loudly rather than half-applying if the submodule is moved forward, in which
+case regenerate it. Do **not** activate the tomas-jax `.venv` — it is CPU-only
+jaxlib with no xarray. The working combination is system `python3` with the GPU
+jax wheel.
 
 Verify the install before touching CESM data. This is four checks, one per way
-the install goes wrong — the patch, the sibling layout, the tomas-jax branch,
-the jax wheel — and it resolves both repos exactly the way the model does, so it
+the install goes wrong — the patch, the submodules, the tomas-jax commit, the
+jax wheel — and it resolves both repos exactly the way the model does, so it
 fails the same way a run would. Paste the whole block at once; the `python3 -c`
 line needs the script that follows it:
 
 ```bash
-# wherever you cloned it -- $PWD if you are standing where the block above ran.
-# The siblings are located relative to this, so it does not have to be $HOME.
-REPO=$PWD/AIDE-SAI-link
+# your clone of this repo -- $PWD if you are standing where the block above ran.
+# models/ is located relative to this, so it does not have to be $HOME.
+REPO=$PWD
 export LD_LIBRARY_PATH=/run/nvidia/driver/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 # 1. zenith patch applied? mu_2d exists only after it
-grep -q mu_2d $(dirname $REPO)/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py \
+grep -q mu_2d $REPO/models/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py \
   && echo "zenith patch applied"
 
 python3 -c "
 import sys; sys.path.insert(0, '$REPO')
-import radiation                      # 2. sibling layout: puts both repos on sys.path, imports rrtmgp + tomas-jax Mie
-from tomas_jax.fast import run_fast   # 3. right branch: exists only on tomas-jax gpu-fast
+import radiation                      # 2. submodules populated: puts both repos on sys.path, imports rrtmgp + tomas-jax Mie
+from tomas_jax.fast import run_fast   # 3. right commit: tomas_jax.fast exists only on gpu-fast
 import jax; print('deps ok:', jax.devices())   # 4. GPU wheel loads
 "
 ```

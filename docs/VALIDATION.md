@@ -29,7 +29,7 @@ They share a folder but answer different questions.
 ### Automated tests — "did I break something?"
 
 Self-contained: they build their inputs from a fixed random seed, need no GPU, no
-CESM archive and no sibling repos, run in seconds, and **exit non-zero on
+CESM archive and no submodules, run in seconds, and **exit non-zero on
 failure**. Safe to run anytime, and CI runs them on every push.
 
 | file | what it asserts |
