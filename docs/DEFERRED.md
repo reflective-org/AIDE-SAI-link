@@ -5,7 +5,7 @@ is a decision, not a TODO that nobody got to.
 
 ## Convert `src/` into an installable Python package
 
-**Status:** deferred to its own PR — see the tracking Issue.
+**Status:** deferred to its own PR — tracked in issue #7.
 
 `src/` is a flat collection of modules on `sys.path`, not a package. A proper
 `src/aide_sai_link/` with `__init__.py` files and a `pyproject.toml` would remove
