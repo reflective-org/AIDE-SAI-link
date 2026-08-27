@@ -209,6 +209,24 @@ production run. `N_DAYS` exists only as the fallback that supplies `N_HOURS`
 when it is unset (`N_HOURS = 24 × N_DAYS`, default 2 days) — for anything
 scripted, set `N_HOURS`.
 
+**What one step does.** Every coupling step walks the same stage list, in order:
+
+| # | Stage | Off when |
+|---|---|---|
+| 0 | SAI source — SO2 into the injection cells | `INJ_SO2_TG_YR=0` |
+| 1 | Transport — all 82 tracers on shared winds | — |
+| 2 | Microphysics — chemistry, nucleation, coagulation, condensation | — |
+| 2b | Settling — the one true aerosol sink | `SETTLE=0` |
+| 3, 4, 4a | Vertical BC, polar caps, open-face reservoir refresh | — |
+| 5 | Radiation — evolved bins → heating → prognostic `dT` | `RAD=0` |
+
+Stages 4 and 5 write state consumed by the **next** step (the frozen advection
+target, and the `dT` the next microphysics sees), so the polar caps and the
+aerosol → radiation → temperature loop close across the step boundary rather
+than within it. `docs/PROCESSES.md` §0 has the full ordering rationale, the
+three nested meanings of "step" (coupling step / advection substep / micro inner
+step), and how to read a `PROFILE=1` breakdown.
+
 `run_prod.sh` sets the whole production environment (GPU pin, `libcuda` path,
 memory policy) and execs `driver_fast.py` from its own tree — so it always runs
 the code you just edited, wherever you launched it from. **A bare `run_prod.sh`
