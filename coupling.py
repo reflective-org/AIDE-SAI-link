@@ -2,7 +2,7 @@
 
 Combines:
   * ../advection/fct.py   -> flux-corrected PPM 3-D advection (via fct_core.py)
-  * ../../tomas-jax       -> TOMAS sectional coagulation microphysics
+  * models/tomas-jax      -> TOMAS sectional coagulation microphysics
 
 One-way coupling, meaning specifically to CESM: CESM supplies the meteorology
 (winds U/V/OMEGA, temperature T) that drives BOTH the transport and the
@@ -66,19 +66,21 @@ import os, sys, time
 import collections
 import numpy as np
 
-# --- the two sibling dependency repos ---------------------------------------
+# --- the two dependency repos, as submodules under models/ -------------------
 # tomas-jax (microphysics) and jax-rrtmgp (radiation) are SEPARATE repos, not
 # vendored here, and this used to be a bare absolute `sys.path.insert` -- which
 # meant a fresh clone could not import its own first module on any other machine.
+# They were sibling clones (`../<name>`) until 2026-08-27 and are now submodules
+# under models/, which is what pins the exact commit behind a result.
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_MODELS = os.path.join(_HERE, 'models')
 
 
 def _dep_path(env, name):
-    """Put a sibling dependency repo on sys.path; return what was used, or None.
+    """Put a dependency submodule on sys.path; return what was used, or None.
 
-    Search order: $<env> wins, so one variable overrides everything; then a
-    sibling of this repo (`../<name>`, which is what a plain `git clone` beside
-    this one gives you).
+    Search order: $<env> wins, so one variable overrides everything; then
+    `models/<name>`, which is what `git submodule update --init` gives you.
 
     Finding nothing is NOT an error. Anything already importable -- pip install
     -e, PYTHONPATH, a venv -- needs none of these; the import below is the real
@@ -90,8 +92,8 @@ def _dep_path(env, name):
     if explicit and not os.path.isdir(explicit):
         raise SystemExit(f"coupling.py: ${env}={explicit!r} is not a directory.\n"
                          f"  Point it at your {name} checkout, or unset it to "
-                         f"search ../{name} and the import path.")
-    for cand in (explicit, os.path.join(os.path.dirname(_HERE), name)):
+                         f"search models/{name} and the import path.")
+    for cand in (explicit, os.path.join(_MODELS, name)):
         if cand and os.path.isdir(cand):
             if cand not in sys.path:
                 sys.path.insert(0, cand)
@@ -109,8 +111,8 @@ except ImportError as _e:
     raise SystemExit(
         f"coupling.py: cannot import tomas_jax ({_e}).\n"
         "  tomas-jax is a separate repo and is NOT vendored in this one. Either\n"
-        "  clone it beside this repo (../tomas-jax), install it, or point\n"
-        "  TOMAS_JAX_PATH at it:\n"
+        "  run `git submodule update --init` to populate models/tomas-jax,\n"
+        "  install it, or point TOMAS_JAX_PATH at it:\n"
         "      TOMAS_JAX_PATH=/path/to/tomas-jax python3 driver_fast.py\n"
         f"  tried: {TOMAS_JAX_PATH or '(no candidate directory exists)'}")
 import jax
