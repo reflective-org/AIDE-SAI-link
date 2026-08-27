@@ -79,8 +79,14 @@ os.environ.setdefault('OUT_TAG', 'tomas_fast')
 
 if os.environ.get('STEP_HOURS', '6') != '6':
     sys.exit("driver_fast: STEP_HOURS must be 6 (parity with 6h step)")
-if os.environ.get('MICRO', 'full') != 'full':
-    sys.exit("driver_fast: MICRO must be 'full'")
+# MICRO=off (transport only, for timing runs) is allowed through: it simply never
+# calls the fast engine, so the 40-bin/6h parity constraints below do not apply to
+# it, and a benchmark then measures advection through the PRODUCTION entry point
+# rather than through a second launcher that can drift from it. The legacy 'coag'
+# path is still refused -- this driver exists to swap the fast engine into the full
+# chain, and pairing it with the pre-SAI model would silently be neither.
+if os.environ.get('MICRO', 'full') not in ('full', 'off'):
+    sys.exit("driver_fast: MICRO must be 'full' (or 'off' for a transport-only run)")
 if os.environ.get('N_BINS', '0') not in ('0', '40'):
     sys.exit(f"driver_fast: fast model is 40-bin -- unset N_BINS or set "
              f"40; got N_BINS={os.environ.get('N_BINS')}")

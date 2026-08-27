@@ -140,6 +140,38 @@ RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh   # continue tha
 Two checkouts launched from the *same* runs directory with the same `OUT_TAG`
 overwrite each other. `OUT_TAG` discipline is what keeps runs apart.
 
+**Narrowing a run to one process.** Each coupling step walks a fixed stage list
+(`docs/PROCESSES.md` §0), and each stage has an env flag that switches it off, so
+a run can be reduced to the process being measured. Transport only:
+
+```bash
+MICRO=off RAD=0 SETTLE=0 STATE_CKPT=0 FRAME_EVERY=48 N_HOURS=48 \
+  OUT_TAG=speed-benchmark $REPO/src/run_prod.sh          # 8 steps, ~100 s
+```
+
+`MICRO=off` (2026-08-27) disables microphysics outright — a benchmark/diagnostic
+mode, **not** a physics configuration: the aerosol is advected but never evolves.
+It goes through the production step loop rather than a separate harness, so what
+is measured is the advection the model actually runs. `MICRO` is validated at
+import (`full|coag|off`); it previously fell through to the legacy `coag` path on
+a typo. `driver_fast.py` accepts `full` and `off` only — pairing the fast engine
+with the pre-SAI `coag` model would silently be neither.
+
+Set `FRAME_EVERY` to the run **length**, not 0: `FRAME_EVERY_STEPS` is
+`max(1, FRAME_EVERY/STEP_HOURS)`, so 0 means a frame every step. `STATE_CKPT=0`
+suppresses the restart cycle; `coupled_final_<TAG>.npz` is still written
+unconditionally and is the bulk of the output.
+
+Measured on one H100 at the production grid (192×288, 24 levels, 1,327,104 cells)
+and production transport settings (`fct_lr`, `ADV_F32=1`, `ADV_CFL=0.5`,
+`ADV_VPOS=1`): **7.2 s/step of advection** in steady state (10.7 s on step 0,
+which carries JIT), at ~168 CFL substeps → **43 ms/substep**, plus 1.5 s of
+`bc+polar`. That is ~43 min of advection over a 360-step 90-day run, i.e. ~2% of
+a full step against the observed 340–370 s — consistent with microphysics being
+~94%. Per-step cost tracks `nsub`, so quote the per-substep figure. As a check on
+the mode itself, `N/N0` finished at 0.9998 over 8 steps of pure advection, matching
+the 0.99987 recorded for the `ADV_VPOS` limiter in `run_prod.sh`.
+
 `run_prod.sh` pins a **single** GPU (`CUDA_VISIBLE_DEVICES=${GPU:-0}`) rather than
 auto-selecting one, so the card a long run lands on is never a function of what
 else happened to be idle at launch. Microphysics shards across all *visible*

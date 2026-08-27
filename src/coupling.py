@@ -283,8 +283,18 @@ N_BC_BOT = int(os.environ.get('N_BC_BOT', '1'))  # bottom band levels pinned to 
 PROBE_HPA  = float(os.environ.get('PROBE_HPA', '50')) # level [hPa] for diagnostics/frames
 # ---- SAI sources & sinks (SO2 -> H2SO4 -> SO4 chain + settling) ----------
 # 'full' = so2_chemistry + nucleation + coagulation + condensation per cell;
-# 'coag' = legacy coagulation-only path (bit-identical to the pre-SAI model)
+# 'coag' = legacy coagulation-only path (bit-identical to the pre-SAI model);
+# 'off'  = NO microphysics at all -- transport only. Added 2026-08-27 for
+#          timing/benchmark runs: it goes through the same step loop (advection,
+#          boundaries, budget, checkpointing) so what is measured is the
+#          production advection, not a separate harness that can drift from it.
+#          Not a physics configuration -- the aerosol only moves, never evolves.
 MICRO_MODE = os.environ.get('MICRO', 'full')
+# Validate here rather than letting a typo fall through to the legacy 'coag'
+# branch: MICRO=fulll would otherwise silently run -- and be reported as -- the
+# pre-SAI coagulation-only model.
+if MICRO_MODE not in ('full', 'coag', 'off'):
+    raise SystemExit(f"coupling: MICRO must be full|coag|off, got {MICRO_MODE!r}")
 # full-micro substeps per coupling step. One 6 h condensation/nucleation call
 # is too coarse right after an injection pulse (the growth solvers assume the
 # gas is quasi-constant over dt), so default to 1 h pieces at STEP_HOURS=6.
@@ -2196,12 +2206,22 @@ def main():
         tm = time.time()
         #accumulated temperature
         T3d = temp(it0) + np.asarray(dT_rad)
+        # RH is read here, OUTSIDE the MICRO branch, because it is not only a
+        # micro input: wet settling (WET_SETTLING) and every wet size diagnostic
+        # (WET_OPTICS) need it too. It used to be read inside the MICRO=full
+        # branch, which left it undefined -- a NameError one step in -- for any
+        # other micro mode.
+        rh3d = relhum(it0)
         #run microphysics on the updated temperature...clip_add and clip_rem over the mass created/destroyed (not truly mass conserving)
-        if MICRO_MODE == 'full':
+        if MICRO_MODE == 'off':
+            # transport only: nothing evolves the bins, and with no two-moment
+            # consistency clip there is no clip mass to report either. The jnp
+            # arrays pass straight through the np/jnp round-trip below.
+            num_np, mas_np, clip_add, clip_rem = num, mas, 0.0, 0.0
+        elif MICRO_MODE == 'full':
             # full chain: SO2+OH consumes so2 -> h2so4; nucleation and
             # condensation move h2so4 into the bins, so aerosol M genuinely
             # grows here (the 'micro' budget stage is now a real source)
-            rh3d = relhum(it0)
             # OH: SZA-parabola diurnal (per substep) or CESM's field (constant
             # over the step). run_microphysics_full accepts either shape.
             oh3d = oh_sza(it0) if OH_SZA else oh_molec(it0, T3d)

@@ -200,6 +200,13 @@ python3 $REPO/scripts/utils/plot_run.py prod90d
 
 # a full year is the same launcher with a longer clock (8760 h = 365 days, ~140 h)
 RESUME=1 N_HOURS=8760 INJ_SO2_TG_YR=10 OUT_TAG=prod1yr $REPO/src/run_prod.sh
+
+# TRANSPORT-ONLY timing run: stages 2, 2b and 5 off, no injection, so only
+# advection and the boundary/polar stages are live. 48 h = 8 steps, ~100 s.
+# FRAME_EVERY is set to the run LENGTH, not 0 -- FRAME_EVERY_STEPS is
+# max(1, FRAME_EVERY/STEP_HOURS), so 0 would mean a frame EVERY step.
+MICRO=off RAD=0 SETTLE=0 STATE_CKPT=0 FRAME_EVERY=48 N_HOURS=48 \
+  OUT_TAG=speed-benchmark $REPO/src/run_prod.sh
 ```
 
 Run length is set **in hours**, always: `N_HOURS` counts forcing hours from
@@ -215,7 +222,7 @@ scripted, set `N_HOURS`.
 |---|---|---|
 | 0 | SAI source — SO2 into the injection cells | `INJ_SO2_TG_YR=0` |
 | 1 | Transport — all 82 tracers on shared winds | — |
-| 2 | Microphysics — chemistry, nucleation, coagulation, condensation | — |
+| 2 | Microphysics — chemistry, nucleation, coagulation, condensation | `MICRO=off` |
 | 2b | Settling — the one true aerosol sink | `SETTLE=0` |
 | 3, 4, 4a | Vertical BC, polar caps, open-face reservoir refresh | — |
 | 5 | Radiation — evolved bins → heating → prognostic `dT` | `RAD=0` |
@@ -226,6 +233,11 @@ aerosol → radiation → temperature loop close across the step boundary rather
 than within it. `docs/PROCESSES.md` §0 has the full ordering rationale, the
 three nested meanings of "step" (coupling step / advection substep / micro inner
 step), and how to read a `PROFILE=1` breakdown.
+
+Switching stages off is how a run is narrowed to one process — `MICRO=off
+RAD=0 SETTLE=0` with no injection leaves transport, which is the timing run in
+the block above. `MICRO=off` is a benchmark/diagnostic mode, not a physics
+configuration: the aerosol moves but never evolves.
 
 `run_prod.sh` sets the whole production environment (GPU pin, `libcuda` path,
 memory policy) and execs `driver_fast.py` from its own tree — so it always runs

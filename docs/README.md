@@ -153,7 +153,7 @@ N_DAYS=365 OUT_TAG=1yr python3 src/coupling.py
 | `OUT_TAG` | `<N_DAYS>day` | output filename tag |
 | `PROFILE` | — | print per-hour phase timing (read / advect / micro / bc+polar) |
 | `DEBUG` | — | print finiteness of num/mas after advect & micro (hour 0) |
-| `MICRO` | `full` | `full` = SO2 chem + nucleation + coag + condensation; `coag` = legacy coag-only |
+| `MICRO` | `full` | `full` = SO2 chem + nucleation + coag + condensation; `coag` = legacy coag-only; `off` = none (transport-only benchmark, not a physics config) |
 | `MICRO_SUBSTEPS` | 6 | full-micro substeps per coupling step (6 ⇒ 1 h pieces at `STEP_HOURS=6`) |
 | `INJ_SO2_TG_YR` | **0** | SAI SO2 injection rate [Tg/yr]. Default dropped from 10 to 0 on 2026-08-03 so a forgotten flag gives an obviously unforced baseline; pass `=10` to reproduce prod90d/prod1yr |
 | `INJ_LAT` / `INJ_LON` / `INJ_HPA` | 0 / 180 / 55 | injection cell (nearest grid point / level) |

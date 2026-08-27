@@ -172,6 +172,19 @@ fi
 # FAST_SORT is overridable for the same reason: an OOM fallback that relaunches with
 # FAST_SORT=0 is useless if the launcher swallows the override and goes straight back
 # into the same OOM.
+#
+# STATE_CKPT and FRAME_EVERY joined them 2026-08-27, same class of bug: both were
+# bare literals, so `STATE_CKPT=0 run_prod.sh` was accepted by the shell and then
+# discarded. A 90-day production run wants both on; a short TIMING run wants neither,
+# because the ~5 GB checkpoint cycle is a large share of a step that is not doing
+# any microphysics. Defaults unchanged.
+#   MICRO=off RAD=0 SETTLE=0 STATE_CKPT=0 FRAME_EVERY=48 N_HOURS=48 \
+#     OUT_TAG=speed-benchmark $REPO/src/run_prod.sh
+# is the transport-only benchmark: the production advection (fct_lr, ADV_F32=1,
+# ADV_CFL=0.5) on the production grid, with everything downstream of it switched off.
+# NB FRAME_EVERY is set to the run LENGTH, not to 0: FRAME_EVERY_STEPS is
+# max(1, FRAME_EVERY/STEP_HOURS), so 0 means a frame EVERY step, the opposite of
+# what a benchmark wants. Setting it >= N_HOURS leaves only the mandatory final one.
 # INJECTION SCENARIO -- the knobs meant to change run to run. Every default below is
 # coupling.py's own default, so a bare run_prod.sh is byte-for-byte the run it
 # always was (verified: step-1 prognostics bit-identical to the reference run).
@@ -251,8 +264,8 @@ INJ_LON=${INJ_LON:-180.0} \
 INJ_ZONAL=${INJ_ZONAL:-1} \
 INJ_MIRROR=${INJ_MIRROR:-0} \
 INIT_BIN=so4 \
-STATE_CKPT=1 \
-FRAME_EVERY=24 \
+STATE_CKPT=${STATE_CKPT:-1} \
+FRAME_EVERY=${FRAME_EVERY:-24} \
 FAST_SORT=${FAST_SORT:-1} \
 FAST_CELL_CAP=50000 \
 ADV_VPOS=1 \

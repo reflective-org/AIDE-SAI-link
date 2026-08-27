@@ -163,7 +163,7 @@ are ignored. Their fast-engine counterparts are in the next section.
 
 | variable | default | meaning |
 |---|---|---|
-| `MICRO` | `full` | `full` = chemistry + nucleation + coagulation + condensation. `coag` = legacy coagulation only. `driver_fast.py` requires `full` |
+| `MICRO` | `full` | `full` = chemistry + nucleation + coagulation + condensation. `coag` = legacy coagulation only. `off` = no microphysics at all, a transport-only benchmark mode and **not** a physics configuration (see `PROCESSES.md` §0). Validated at import. `driver_fast.py` accepts `full` and `off` |
 | `ALPHA_COND` | `1.0` | H2SO4 accommodation (sticking) coefficient — the fraction of vapour–particle collisions that actually condense. `1.0` = every collision sticks, the fastest condensation physically allowed. **Read by both engines** |
 | `SETTLE` | `1` | gravitational settling, the model's only true aerosol sink |
 | `WET_SETTLING` | `1` | size the settling particle as the wet H2SO4/H2O droplet; `0` restores dry-core sizing. Ignored when `SETTLE=0` |
