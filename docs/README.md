@@ -11,7 +11,7 @@ driven **one-way** by CESM meteorology — one-way meaning *to CESM*: the winds 
 prescribed and the circulation never responds. The aerosol–radiation–microphysics
 loop inside that forcing is closed (see [Not included](#not-included-the-one-way-scope)).
 Production transport is the Lin-Rood scheme in
-`fast_advection/fct_lr.py`; the older PPM+FCT `fct.py` is the lineage and the
+`src/advection/fct_lr.py`; the older PPM+FCT `fct.py` is the lineage and the
 source of the pressure convention described below.
 
 ```
@@ -24,9 +24,9 @@ CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (Lin-Rood fl
 | File | Role |
 |------|------|
 | `coupling.py`  | The model: load CESM, init from MAM4, advect+microphysics loop, save. Runnable standalone. |
-| `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../run_prod.sh`. |
-| `fast_advection/fct_lr.py` | Lin-Rood flux-form advection — the production transport scheme. |
-| `fast_advection/fct_fast.py` | PPM/Zalesak primitives that `fct_lr` imports. |
+| `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../src/run_prod.sh`. |
+| `src/advection/fct_lr.py` | Lin-Rood flux-form advection — the production transport scheme. |
+| `src/advection/fct_fast.py` | PPM/Zalesak primitives that `fct_lr` imports. |
 | `fct_core.py`  | Legacy sealed-face PPM/FCT transport (from `fct.py`). **Not on the run path** as of 2026-08-03; kept only for the bit-identical legacy check in `validation/test_conservation.py`. |
 | `settling.py`  | Gravitational settling sink. |
 | `radiation.py` | RRTMGP + Mie optics. |
@@ -113,26 +113,26 @@ The model now carries the full **SO2 → H2SO4 → SO4** chain and a
   `BOUNDARY_CONDITIONS.md`.
 
 ## Run
-Production runs go through `../run_prod.sh` (which execs `driver_fast.py`), not
+Production runs go through `../src/run_prod.sh` (which execs `driver_fast.py`), not
 these commands — see MANIFEST.md. Direct `coupling.py` invocation is the
 standalone/dev path:
 
 ```bash
 # short validation (default 2 days, hourly), single GPU
-N_DAYS=2 OUT_TAG=2day CUDA_VISIBLE_DEVICES=0 python3 coupling.py
+N_DAYS=2 OUT_TAG=2day CUDA_VISIBLE_DEVICES=0 python3 src/coupling.py
 python3 plot_run.py 2day
 
 # quick smoke test
-N_HOURS=2 OUT_TAG=smoke python3 coupling.py
+N_HOURS=2 OUT_TAG=smoke python3 src/coupling.py
 
 # scale up
-N_DAYS=365 OUT_TAG=1yr python3 coupling.py
+N_DAYS=365 OUT_TAG=1yr python3 src/coupling.py
 ```
 
 ### Environment knobs
 
 > These are the **`coupling.py` module defaults** — what you get running
-> `python3 coupling.py` directly. They are NOT what a production run uses:
+> `python3 src/coupling.py` directly. They are NOT what a production run uses:
 > `run_prod.sh` overrides or hard-sets many of them (`OUT_TAG`, `DEBUG`,
 > `PROFILE`, `FAST_CELL_CAP`, …). For the effective production values, and for
 > the knobs this table does not list, see

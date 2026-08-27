@@ -24,10 +24,13 @@ disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
 
 ## Layout invariants
 
-- **The core modules are flat on purpose.** `coupling.py` does bare
-  `import settling` / `import radiation`, and both `coupling.py` and
-  `driver_fast.py` insert `fast_advection/` on `sys.path` themselves. Moving
-  them into packages breaks those imports.
+- **Source lives in `src/`, but the module names are flat on purpose.**
+  `coupling.py` does bare `import settling` / `import radiation`, and
+  `src/_paths.py` puts each `src/` subdirectory on `sys.path` so they resolve.
+  `src/` is NOT a package: do not add `__init__.py` to a subdirectory whose name
+  collides with a module (`src/settling/` vs `settling.py`), and do not let an
+  import-sorting pass reorder modules that set up `sys.path` before importing
+  what that setup makes importable. See `docs/REPO_LAYOUT.md`.
 - `driver_fast.py` is the production entry point: it imports `coupling.py` and
   monkeypatches in the batched `tomas_jax.fast` engine. `coupling.py` alone is
   the standalone/dev path and uses the same advection, so the two agree.

@@ -3,14 +3,15 @@
 Things deliberately not done, with the reason and what it would take. Each entry
 is a decision, not a TODO that nobody got to.
 
-## Convert the source tree into an installable Python package
+## Convert `src/` into an installable Python package
 
 **Status:** deferred to its own PR — see the tracking Issue.
 
-The source is a flat collection of modules on `sys.path`, not a package. A proper
+`src/` is a flat collection of modules on `sys.path`, not a package. A proper
 `src/aide_sai_link/` with `__init__.py` files and a `pyproject.toml` would remove
 every `sys.path.insert()` in the tree, let `ruff`'s import-sorting rule (`I001`)
-be switched back on, and make the coupler importable and testable from anywhere.
+be switched back on, remove the `src/settling/` vs `settling.py` name shadowing,
+and make the coupler importable and testable from anywhere.
 
 **Why not now:** it rewrites every local `import` in `coupling.py` (160 KB),
 `driver_fast.py`, `radiation.py`, both advection modules and all six validation
@@ -28,9 +29,9 @@ code from a path other than the one being edited; the same care applies here.
 
 **Status:** planned as a follow-up step.
 
-`validation/`, `plot_run.py` and `gif_run.py` sit at the repo root alongside the
-coupling source. Once the source moves to `src/`, these belong in a sibling
-directory of their own. The `outputs/` directory exists and
+`validation/`, `plot_run.py` and `gif_run.py` still sit at the repo root.
+`src/` now holds only what is needed to advance the coupled state, so these
+belong in a sibling directory of their own. The `outputs/` directory exists and
 is documented for their products, but nothing writes there yet — `plot_run.py`
 still emits its PNGs into the run directory.
 
@@ -38,7 +39,7 @@ still emits its PNGs into the run directory.
 
 **Status:** open question, no action taken.
 
-`fct_core.py` is not on the runtime path. `coupling.py` records
+`src/advection/fct_core.py` is not on the runtime path. `coupling.py` records
 that it deliberately replaced it with `fct_lr` because reaching `fct_core` gave
 silently *different* transport (sealed vertical faces, no air-mass tracking)
 under identical diagnostics. The only remaining importer is
@@ -49,3 +50,16 @@ So it is not dead code exactly — it is a reference implementation with one
 consumer. Deleting it would remove that comparison; keeping it leaves a module
 that must never be imported by anything else. Worth an explicit decision rather
 than a silent one.
+
+## Two one-line CI changes that need `workflow` token scope
+
+**Status:** not applied; they modify `.github/workflows/ci.yml`, which an OAuth
+token without the `workflow` scope cannot push.
+
+1. `ruff check .` descends into the two submodules and reports findings in
+   upstream code this project does not own. Fix: `--exclude models`.
+2. The import check is `python -c "import settling"`, which relied on `settling.py`
+   being at the repo root. Fix: `PYTHONPATH=src/settling`, or point it at
+   `src/_paths`.
+
+The second one makes CI fail until it lands.

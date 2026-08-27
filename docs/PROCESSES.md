@@ -31,7 +31,7 @@ exact, not an approximation.
 
 ## 1.2 Scheme: Lin-Rood flux form
 
-`fast_advection/fct_lr.py`. PPM reconstruction, Zalesak limiter, dimensionally
+`src/advection/fct_lr.py`. PPM reconstruction, Zalesak limiter, dimensionally
 split (x, y, z sweeps), CFL 0.5, f32.
 
 The predecessor (`fct_fast.py`) used the **advective form**: flux divergence plus
