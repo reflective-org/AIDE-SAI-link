@@ -44,7 +44,8 @@ settling.py                 gravitational settling; also the canonical wet-dropl
 radiation.py                RRTMGP + Mie optics
 fast_advection/fct_lr.py    Lin-Rood flux-form advection (the production scheme)
 fast_advection/fct_fast.py  PPM/Zalesak primitives that fct_lr imports
-rad_data/                   palmer_williams_h2so4.dat (HITRAN Aerosols-2016)
+inputs/rad_data/            palmer_williams_h2so4.dat (Palmer & Williams 1975,
+                            as distributed in HITRAN Aerosols-2016)
 run_prod.sh                 the production launcher (self-documenting header)
 plot_run.py                 the three post-run figures (dashboard, filmstrip, size dist)
 gif_run.py                  animated versions of the filmstrip panels
@@ -52,6 +53,11 @@ docs/                       CONFIGURATION (every env var), VALIDATION (the harne
                             PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
 validation/                 harnesses -- see below
 .github/workflows/ci.yml    CI: the two self-contained tests + a ruff errors-only gate
+models/tomas-jax            SUBMODULE, pinned. Sectional microphysics (branch gpu-fast)
+models/jax-rrtmgp           SUBMODULE, pinned. Radiative transfer (needs patches/)
+inputs/                     static input data + provenance of the external CESM archive
+runs/                       raw model output, one directory per OUT_TAG. Gitignored
+outputs/                    derived figures and tables. Gitignored
 ```
 
 **Analysis scripts are flat and read `coupled_*_<TAG>.npz` from the current working
