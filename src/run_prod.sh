@@ -238,7 +238,7 @@ export CUDA_VISIBLE_DEVICES=${GPU:-0}
 export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
 # 4. The sibling dependency repos are NOT set here. coupling.py resolves
 #    tomas-jax and jax-rrtmgp itself (TOMAS_JAX_PATH / RRTMGP_PATH, else
-#    else ../<name>), so both a clone beside them and an installed copy work with
+#    else models/<name>), so both the submodules and an installed copy work with
 #    nothing exported. Export those two variables before calling this script if the
 #    repos live somewhere else.
 echo "run_prod.sh: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES  preallocate=$XLA_PYTHON_CLIENT_PREALLOCATE" >&2
