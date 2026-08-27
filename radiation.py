@@ -69,8 +69,10 @@ SIGMA_SB = 5.670374419e-8
 RRTMGP_PKG = os.path.dirname(rrtmgp_lib.__file__)          # .../jax-rrtmgp/rrtmgp
 RRTMGP_DATA = os.path.join(RRTMGP_PKG, 'optics/rrtmgp_data')
 RRTMGP_TESTDATA = os.path.join(RRTMGP_PKG, 'optics/test_data')
-RI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       'rad_data/palmer_williams_h2so4.dat')
+# Repo-root-relative, not __file__-relative: the static input data lives in
+# inputs/, which is a sibling of wherever this module sits, not a child of it.
+RI_FILE = os.path.join(_HERE, 'inputs', 'rad_data',
+                       'palmer_williams_h2so4.dat')
 
 CO2_PPM  = float(os.environ.get('CO2_PPM', '380.0'))   # ~2005 value for 1996-2014
 N2O_PPB  = float(os.environ.get('N2O_PPB', '319.0'))

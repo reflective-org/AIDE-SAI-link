@@ -126,7 +126,7 @@ set -euo pipefail
 #   cd <runs dir> && INJ_SO2_TG_YR=10 OUT_TAG=prod90d /path/to/repo/run_prod.sh
 # Nothing on the import path needs the cwd: coupling.py resolves tomas-jax and
 # jax-rrtmgp from its own __file__ (_dep_path/_HERE), radiation.py resolves
-# rad_data/ the same way, and python3 puts the script's own directory on sys.path.
+# inputs/rad_data/ the same way, and python3 puts the script's own directory on sys.path.
 #
 # TRADEOFF, stated plainly: the old `cd` also meant two checkouts could not collide,
 # because each wrote into itself. Now they collide if both are launched from the same
