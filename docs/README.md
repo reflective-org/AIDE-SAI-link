@@ -27,11 +27,11 @@ CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (Lin-Rood fl
 | `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../src/run_prod.sh`. |
 | `src/advection/fct_lr.py` | Lin-Rood flux-form advection — the production transport scheme. |
 | `src/advection/fct_fast.py` | PPM/Zalesak primitives that `fct_lr` imports. |
-| `fct_core.py`  | Legacy sealed-face PPM/FCT transport (from `fct.py`). **Not on the run path** as of 2026-08-03; kept only for the bit-identical legacy check in `validation/test_conservation.py`. |
+| `fct_core.py`  | Legacy sealed-face PPM/FCT transport (from `fct.py`). **Not on the run path** as of 2026-08-03; kept only for the bit-identical legacy check in `scripts/validation/test_conservation.py`. |
 | `settling.py`  | Gravitational settling sink. |
 | `radiation.py` | RRTMGP + Mie optics. |
-| `plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
-| `gif_run.py`   | Animated versions of the filmstrip panels. |
+| `scripts/utils/plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
+| `scripts/utils/gif_run.py`   | Animated versions of the filmstrip panels. |
 
 ## State (what is tracked & advected)
 Two moments per size bin — no per-species aerosol chemistry:
@@ -120,7 +120,7 @@ standalone/dev path:
 ```bash
 # short validation (default 2 days, hourly), single GPU
 N_DAYS=2 OUT_TAG=2day CUDA_VISIBLE_DEVICES=0 python3 src/coupling.py
-python3 plot_run.py 2day
+python3 scripts/utils/plot_run.py 2day
 
 # quick smoke test
 N_HOURS=2 OUT_TAG=smoke python3 src/coupling.py

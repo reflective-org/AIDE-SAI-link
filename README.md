@@ -189,14 +189,14 @@ mkdir -p "$RUNS" && cd "$RUNS"
 
 # 1-step smoke test: N_HOURS=6 is one 6 h coupling step, ~6 min on an H100.
 N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/src/run_prod.sh
-python3 $REPO/plot_run.py smoke               # -> smoke_{dashboard,filmstrip,sizedist}.png
+python3 $REPO/scripts/utils/plot_run.py smoke               # -> smoke_{dashboard,filmstrip,sizedist}.png
 
 # the production scenario: 10 Tg SO2/yr equatorial ring, 90 days.
 # N_HOURS=2160 (2160 h / 6 h = 360 steps = 90 days) is run_prod.sh's default,
 # so it is written out here only to make the run length explicit.
 N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh          # ~33-36 h on one H100
 RESUME=1 N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh # continue after a kill
-python3 $REPO/plot_run.py prod90d
+python3 $REPO/scripts/utils/plot_run.py prod90d
 
 # a full year is the same launcher with a longer clock (8760 h = 365 days, ~140 h)
 RESUME=1 N_HOURS=8760 INJ_SO2_TG_YR=10 OUT_TAG=prod1yr $REPO/src/run_prod.sh
@@ -227,8 +227,8 @@ Each run writes, into the launch directory:
 | `coupled_timeseries_<TAG>.npz` | per-step scalar diagnostics (burdens, AOD550, ARF) |
 | `coupled_state_<TAG>_ckpt.npz` | restart checkpoint (+ `_frames_`/`_timeseries_` twins) |
 
-Then `python3 plot_run.py <TAG>` writes the three figures and
-`python3 gif_run.py <TAG> [--fps 8] [--width 900]` animates the filmstrip
+Then `python3 scripts/utils/plot_run.py <TAG>` writes the three figures and
+`python3 scripts/utils/gif_run.py <TAG> [--fps 8] [--width 900]` animates the filmstrip
 panels. Both read `coupled_*_<TAG>.npz` from the **current working directory**.
 
 ## Configuration

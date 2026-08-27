@@ -16,14 +16,19 @@ AIDE-SAI-link/
     radiation/       radiation.py -- Mie + RRTMGP -> heating, AOD, ARF
     settling/        settling.py -- closed-form gravitational settling
     microphysics/    tomas_fast.py -- the tomas_jax.fast adapter
+  scripts/         everything that reads a run rather than producing one
+    validation/      physics validation harnesses
+    utils/           plot_run.py, gif_run.py -- the post-run figures
   inputs/          small static input data + provenance of the external archives
   runs/            raw model output, one directory per OUT_TAG   (gitignored)
   outputs/         derived figures and tables                    (gitignored)
-  validation/      physics validation harnesses
   docs/            documentation
   patches/         patches that must be applied to a submodule
-  plot_run.py  gif_run.py                                        (plotting)
 ```
+
+The `src/` vs `scripts/` split is the load-bearing one: `src/` is what advances
+the coupled state, `scripts/` is what inspects it afterwards. A run must not
+depend on anything in `scripts/`.
 
 ## Where does a new file go?
 
@@ -31,8 +36,8 @@ AIDE-SAI-link/
 |---|---|
 | needed to advance the coupled state | `src/<process>/` |
 | a new physical process | a new `src/<process>/` directory |
-| a check that the physics is right | `validation/` |
-| a figure or a plot script | `plot_run.py` / `gif_run.py` today, `outputs/` for their products |
+| a check that the physics is right | `scripts/validation/` |
+| a figure or a plot script | `scripts/utils/`; its products in `outputs/` |
 | data the model reads and that is small | `inputs/` |
 | data the model writes | `runs/<TAG>/` — never committed |
 | a change to tomas-jax or jax-rrtmgp | that repo, upstream; or `patches/` if it cannot be |

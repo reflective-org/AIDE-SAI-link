@@ -30,7 +30,7 @@ import sys
 
 # --- the two dependency repos, as submodules under models/ -------------------
 # Duplicated from coupling.py on purpose: radiation.py is imported directly by
-# validation/test_radiation.py and validate_radiation.py, which never load
+# scripts/validation/test_radiation.py and validate_radiation.py, which never load
 # coupling.py, so it cannot rely on coupling having fixed up sys.path first.
 # Keep the two copies in step. See coupling._dep_path for the full rationale.
 # Bootstrap src/ (the parent of this module's own directory) onto sys.path so

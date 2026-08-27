@@ -35,11 +35,11 @@ disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
   monkeypatches in the batched `tomas_jax.fast` engine. `coupling.py` alone is
   the standalone/dev path and uses the same advection, so the two agree.
 - `fct_core.py` is legacy and **not on the run path** — it exists only for the
-  bit-identical comparison in `validation/test_conservation.py`.
+  bit-identical comparison in `scripts/validation/test_conservation.py`.
 - Analysis scripts read `coupled_*_<TAG>.npz` from the *current working
   directory* and write `<TAG>_*.png` beside them.
 - Prefer extending `coupling.py` over adding helper scripts; the four
-  overlapping plot scripts this repo used to have are why `plot_run.py` is one
+  overlapping plot scripts this repo used to have are why `scripts/utils/plot_run.py` is one
   file.
 
 ## Working on this code
@@ -66,13 +66,13 @@ disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
 ## Run outputs
 
 **Outputs live in `runs/<TAG>/`**, one directory per `OUT_TAG`, gitignored.
-Every output path in `coupling.py` and `plot_run.py` is relative to the working
+Every output path in `coupling.py` and `scripts/utils/plot_run.py` is relative to the working
 directory, so the working directory is the run:
 
 ```bash
 mkdir -p runs/prod90d && cd runs/prod90d
 OUT_TAG=prod90d ../../src/run_prod.sh
-python3 ../../plot_run.py prod90d
+python3 ../../scripts/utils/plot_run.py prod90d
 ```
 
 `run_prod.sh` **refuses** to start from anywhere inside the checkout except

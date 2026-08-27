@@ -24,7 +24,10 @@ import numpy as np
 # settling.py lives in the REPO ROOT, one level up from this file. Python puts
 # the SCRIPT's directory on sys.path, never the cwd, so this insert is what makes
 # `import settling` work regardless of where the harness is launched from.
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# three dirnames: scripts/validation/<this file> -> scripts/validation ->
+# scripts -> the repo root. Was two until the 2026-08-27 move into scripts/.
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, 'src'))
 import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 import jax.numpy as jnp

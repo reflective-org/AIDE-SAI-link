@@ -18,7 +18,10 @@ Read-only w.r.t. the production run. Runs on its own GPU.
 """
 import os, sys, numpy as np
 import os as _os
-_REPO = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+# three dirnames: scripts/validation/<this file> -> scripts/validation ->
+# scripts -> the repo root. Was two until the 2026-08-27 move into scripts/.
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))))
 
 
 sys.path.insert(0, _os.path.join(_REPO, 'src'))

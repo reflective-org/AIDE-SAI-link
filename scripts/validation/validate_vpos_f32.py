@@ -17,7 +17,10 @@ import os as _os
 # into validation/ and 2026-07-30, so this harness died on its 2nd line -- the
 # prologue that floor_anatomy.py got was not copied across. Repo root carries
 # coupling/settling/radiation; fast_advection/ carries fct_lr and fct_fast.
-_REPO = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+# three dirnames: scripts/validation/<this file> -> scripts/validation ->
+# scripts -> the repo root. Was two until the 2026-08-27 move into scripts/.
+_REPO = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))))
 sys.path.insert(0, _os.path.join(_REPO, 'src'))
 import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 import jax, jax.numpy as jnp

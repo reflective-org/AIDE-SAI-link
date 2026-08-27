@@ -22,7 +22,7 @@ one. That is what the checks here are for: they assert invariants the physics
 must satisfy regardless of what the answer turns out to be — mass in equals mass
 out, a droplet is bigger than its dry core, fall speed rises with size.
 
-## Two kinds of thing in `validation/`
+## Two kinds of thing in `scripts/validation/`
 
 They share a folder but answer different questions.
 
@@ -38,8 +38,8 @@ failure**. Safe to run anytime, and CI runs them on every push.
 | `test_physics_math.py` | closed-form settling physics: Tang solution density, wet growth factor (1.087–2.566, cross-checked against the run header), slip-corrected fall speed, and that the implicit sweep changes the burden *only* by its bottom outflow |
 
 ```bash
-python3 $REPO/validation/test_conservation.py     # ~12 s
-python3 $REPO/validation/test_physics_math.py     # ~2 s
+python3 $REPO/scripts/validation/test_conservation.py     # ~12 s
+python3 $REPO/scripts/validation/test_physics_math.py     # ~2 s
 ```
 
 What they do **not** cover: microphysics, radiation, the coupled loop, and

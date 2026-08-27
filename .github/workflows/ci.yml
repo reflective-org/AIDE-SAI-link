@@ -2,7 +2,7 @@
 #
 # WHAT THIS CAN AND CANNOT COVER. GitHub's runners have no GPU and not the ~23 TB
 # CESM archive, so the physics validation does not run here -- of the five
-# harnesses in validation/, only test_conservation.py is self-contained (it
+# harnesses in scripts/validation/, only test_conservation.py is self-contained (it
 # builds its fields from np.random.default_rng(seed)). The other four need the
 # CESM archive, a run checkpoint, or both, and are left to be run on the box.
 #
@@ -41,7 +41,7 @@ jobs:
           pip install "jax>=0.6.2" "jaxlib>=0.6.2" "numpy>=2.0"
 
       # settling.py imports cleanly on its own (jax + numpy only). coupling.py,
-      # radiation.py and plot_run.py cannot be imported here: the first two need
+      # radiation.py and scripts/utils/plot_run.py cannot be imported here: the first two need
       # the tomas-jax / jax-rrtmgp submodules, which this job does not check out,
       # and plot_run needs cartopy.
       #
@@ -55,14 +55,14 @@ jobs:
       # Both exit 1 on any failure (see their FAILED lists), so the job status is
       # real. ~12 s and ~2 s on CPU.
       - name: advection conservation
-        run: python validation/test_conservation.py
+        run: python scripts/validation/test_conservation.py
 
       # Closed-form physics in settling.py: Tang density, wet growth factor,
       # slip-corrected fall speed, and the implicit sweep's conservation
       # identity. The only physics in the tree with no GPU/CESM/tomas-jax
       # dependency, hence the only physics CI can reach.
       - name: settling physics
-        run: python validation/test_physics_math.py
+        run: python scripts/validation/test_physics_math.py
 
   lint:
     name: lint
