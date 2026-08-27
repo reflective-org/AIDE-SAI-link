@@ -26,8 +26,8 @@ import numpy as np
 # died before a single test ran. Python puts the SCRIPT's directory on sys.path,
 # never the cwd, so launching from the repo root does not save it either.
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _REPO)
-sys.path.insert(0, os.path.join(_REPO, 'fast_advection'))
+sys.path.insert(0, os.path.join(_REPO, 'src'))
+import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 import jax.numpy as jnp
 import fct_fast as F
 

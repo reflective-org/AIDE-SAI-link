@@ -33,8 +33,13 @@ import sys
 # validation/test_radiation.py and validate_radiation.py, which never load
 # coupling.py, so it cannot rely on coupling having fixed up sys.path first.
 # Keep the two copies in step. See coupling._dep_path for the full rationale.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_MODELS = os.path.join(_HERE, 'models')
+# Bootstrap src/ (the parent of this module's own directory) onto sys.path so
+# _paths imports. radiation.py is loaded directly by the validation harnesses,
+# which never load coupling.py, so it cannot rely on coupling having done this.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _paths                      # noqa: E402 -- needs the insert above
+_HERE = _paths.SRC
+_MODELS = _paths.MODELS
 for _env, _name in (('TOMAS_JAX_PATH', 'tomas-jax'), ('RRTMGP_PATH', 'jax-rrtmgp')):
     for _cand in (os.environ.get(_env),
                   os.path.join(_MODELS, _name)):
@@ -71,7 +76,7 @@ RRTMGP_DATA = os.path.join(RRTMGP_PKG, 'optics/rrtmgp_data')
 RRTMGP_TESTDATA = os.path.join(RRTMGP_PKG, 'optics/test_data')
 # Repo-root-relative, not __file__-relative: the static input data lives in
 # inputs/, which is a sibling of wherever this module sits, not a child of it.
-RI_FILE = os.path.join(_HERE, 'inputs', 'rad_data',
+RI_FILE = os.path.join(_paths.INPUTS, 'rad_data',
                        'palmer_williams_h2so4.dat')
 
 CO2_PPM  = float(os.environ.get('CO2_PPM', '380.0'))   # ~2005 value for 1996-2014

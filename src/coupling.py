@@ -72,8 +72,14 @@ import numpy as np
 # meant a fresh clone could not import its own first module on any other machine.
 # They were sibling clones (`../<name>`) until 2026-08-27 and are now submodules
 # under models/, which is what pins the exact commit behind a result.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_MODELS = os.path.join(_HERE, 'models')
+# Bootstrap src/ onto sys.path so _paths imports, then let _paths put the
+# process subdirectories (advection/, radiation/, settling/, microphysics/) on
+# it too. That single import is what keeps every `import settling` / `import
+# fct_lr` below working unchanged now that the files live in subdirectories.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _paths                      # noqa: E402 -- needs the insert above
+_HERE = _paths.SRC
+_MODELS = _paths.MODELS
 
 
 def _dep_path(env, name):
@@ -175,9 +181,7 @@ import settling
 # BC_EDGE default from 'clamp' to 'open'. That is the production boundary
 # treatment -- see the note at that probe.
 import functools
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                'fast_advection'))
-import fct_lr
+import fct_lr                      # src/advection/, put on sys.path by _paths
 advect_hour_batch = functools.partial(
     fct_lr.advect_hour_batch,
     cfl=float(os.environ.get('ADV_CFL', '0.5')),

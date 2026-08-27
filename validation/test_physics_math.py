@@ -25,7 +25,8 @@ import numpy as np
 # the SCRIPT's directory on sys.path, never the cwd, so this insert is what makes
 # `import settling` work regardless of where the harness is launched from.
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, 'src'))
+import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 import jax.numpy as jnp
 import settling as S
 
