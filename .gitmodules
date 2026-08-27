@@ -1,0 +1,7 @@
+[submodule "models/tomas-jax"]
+	path = models/tomas-jax
+	url = https://github.com/reflective-org/tomas-jax
+	branch = gpu-fast
+[submodule "models/jax-rrtmgp"]
+	path = models/jax-rrtmgp
+	url = https://github.com/climate-analytics-lab/jax-rrtmgp
