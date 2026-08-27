@@ -15,16 +15,19 @@
 # TWO DEPENDENCIES ARE NOT ON PyPI and are NOT installed by this file:
 #     tomas-jax    sectional aerosol microphysics    -> TOMAS_JAX_PATH
 #     jax-rrtmgp   radiative transfer                -> RRTMGP_PATH
-# Clone both beside this repo (../tomas-jax, ../jax-rrtmgp) and they are found
-# automatically; otherwise point those two variables at them. Run with RAD=0 to
-# skip radiation, and jax-rrtmgp with it.
+# Both are git submodules under models/, pinned to exact commits, and are found
+# automatically once populated; otherwise point those two variables at them. Run
+# with RAD=0 to skip radiation, and jax-rrtmgp with it.
 #
-# NEITHER IS A PLAIN CLONE OF ITS DEFAULT BRANCH:
-#     git clone -b gpu-fast https://github.com/reflective-org/tomas-jax
-#         `main` has no tomas_jax.fast, the engine driver_fast.py runs on.
-#     git -C ../jax-rrtmgp apply <this repo>/patches/jax-rrtmgp-zenith.patch
-#         per-column solar zenith; without it RAD=1 dies in the shortwave solve.
-# See the README Installation section for the whole sequence.
+#     git submodule update --init
+#
+# ONE OF THEM STILL NEEDS A PATCH. The submodule pins a commit, and the zenith
+# fix is in no upstream commit, so it must be applied after checkout:
+#     git -C models/jax-rrtmgp apply ../../patches/jax-rrtmgp-zenith.patch
+#         per-column solar zenith; without it RAD=1 computes nonsense in the
+#         shortwave solve rather than failing.
+# tomas-jax is pinned on the gpu-fast branch: `main` has no tomas_jax.fast, the
+# engine driver_fast.py runs on. See the README Installation section.
 #
 # The CESM h1 hourly meteorology is also not shipped (~TB). See CESM_DIR in
 # coupling.py and docs/COUPLING_VARIABLES.md for the variables required.
