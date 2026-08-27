@@ -4,14 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[VERSION]
+[Unreleased]
 
 Added
 
-- 
-- 
+- `models/` — `tomas-jax` (pinned `787c991`, branch `gpu-fast`) and `jax-rrtmgp`
+  (pinned `99d2d71`) are now git submodules, so a clone reconstructs the exact
+  code behind a result instead of relying on two unpinned sibling clones.
+- `inputs/` — small tracked static input data (`rad_data/`) plus a README
+  recording the provenance of all three input datasets, including the external
+  CESM archive and its `CESM_DIR` / `CESM_PREFIX` / `CESM_SUF` overrides.
+- `runs/<TAG>/` for raw model output and `outputs/` for derived products. Both
+  gitignored, each with a tracked README.
+- `docs/REPO_LAYOUT.md` — the tree, and the rule for where a new file goes.
+- `docs/DEFERRED.md` — work deliberately not done, with reasons.
+
+Changed
+
+- `coupling._dep_path` and its deliberate duplicate in `radiation.py` resolve
+  the dependencies from `models/<name>` rather than `../<name>`. The
+  `TOMAS_JAX_PATH` / `RRTMGP_PATH` overrides are unchanged and still win.
+- `patches/jax-rrtmgp-zenith.patch` regenerated against the pinned commit; the
+  old one targeted v0.2.1 (`d7abe2e`) and no longer applied. Applying it is now
+  documented as required setup, because a gitlink cannot carry the fix.
+- `radiation.RI_FILE` resolves from the repo root rather than `__file__`.
+- Documentation that told the reader to clone the dependencies as siblings —
+  README, MANIFEST, `docs/README.md`, `docs/CONFIGURATION.md`,
+  `docs/VALIDATION.md` and two `ImportError` messages — now describes the
+  submodule layout. Following the old instructions would have produced a tree
+  the resolver does not look at.
 
 Removed
 
-- 
-- 
+- `rad_data/` at the repo root (moved to `inputs/rad_data/`).
+- `sai_runs/` beside the repo, and the loose `coupled_*prod1d*` artifacts in its
+  parent directory (moved to `runs/smoke/` and `runs/prod1d/`; nothing deleted).

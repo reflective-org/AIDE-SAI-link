@@ -237,3 +237,20 @@ NOTES.md
 *.png
 *.gif
 *.pid
+
+# ---------------------------------------------------------------------------
+# runs/ and outputs/ -- the two directories that exist to hold things git must
+# never see
+# ---------------------------------------------------------------------------
+# runs/<TAG>/ is raw model output (~5 GB per checkpoint cycle on a 90-day run);
+# outputs/ is what plotting and analysis derive from it. Both are reproducible
+# from the model plus a tag, so neither belongs in history.
+#
+# The pattern is `runs/*`, NOT `runs/`: git does not descend into an excluded
+# directory, so the trailing-slash form would make the `!` exception below
+# unreachable and the READMEs -- which are the only record of what each
+# directory is for -- would vanish from a fresh clone.
+runs/*
+!runs/README.md
+outputs/*
+!outputs/README.md

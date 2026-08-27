@@ -108,8 +108,8 @@ state is never newer than the diagnostics.
 | `CESM_DIR` | *(the FWHIST archive these results were made from)* | root of the CESM tseries archive; layout `$CESM_DIR/hour_1/$CESM_PREFIX.h1.<VAR>$CESM_SUF` |
 | `CESM_PREFIX` | `f.e21.FWHIST.f09_f09_mg17...cam` | filename prefix inside that archive |
 | `CESM_SUF` | `.1996010100-2014123100.nc` | filename suffix (the date range) |
-| `TOMAS_JAX_PATH` | `../tomas-jax` | microphysics repo, else the normal import path |
-| `RRTMGP_PATH` | `../jax-rrtmgp` | radiation repo, same order. Unused when `RAD=0` |
+| `TOMAS_JAX_PATH` | `models/tomas-jax` | microphysics submodule, else the normal import path |
+| `RRTMGP_PATH` | `models/jax-rrtmgp` | radiation submodule, same order. Unused when `RAD=0` |
 | `CARMA_FILE` | *(a site path)* | CARMA history file, only read when `AER_SRC=carma` |
 
 A variable that is *set but points nowhere* is an error, not a silent fallback.

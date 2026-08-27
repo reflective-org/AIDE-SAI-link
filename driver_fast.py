@@ -23,8 +23,8 @@ Why a separate driver (not just an env flag):
 
 Run: use ../run_prod.sh, which sets the whole production environment (GPU pin,
 libcuda path, memory policy) and execs this file. Direct invocation for a short
-test, once tomas-jax and jax-rrtmgp are importable -- clone them beside this repo
-or set TOMAS_JAX_PATH / RRTMGP_PATH; coupling.py resolves both:
+test, once tomas-jax and jax-rrtmgp are importable -- `git submodule update
+--init`, or set TOMAS_JAX_PATH / RRTMGP_PATH; coupling.py resolves both:
 
   INJ_SO2_TG_YR=0 N_HOURS=18 DEBUG=1 PROFILE=1 \
       FAST_CELL_CAP=250000 OUT_TAG=smoke python3 driver_fast.py

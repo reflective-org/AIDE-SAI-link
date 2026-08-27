@@ -6,7 +6,7 @@
 > that have not changed. Where it disagrees with MANIFEST, MANIFEST is current.
 > Numbers here were re-checked against the tree on 2026-08-12.
 
-Combines flux-form advection with the sectional microphysics from `../tomas-jax`,
+Combines flux-form advection with the sectional microphysics from `models/tomas-jax`,
 driven **one-way** by CESM meteorology — one-way meaning *to CESM*: the winds are
 prescribed and the circulation never responds. The aerosol–radiation–microphysics
 loop inside that forcing is closed (see [Not included](#not-included-the-one-way-scope)).

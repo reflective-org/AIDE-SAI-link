@@ -8,16 +8,23 @@ fails downstream on a shape mismatch (or, on a square grid, silently computes
 nonsense). This drops the trailing singleton axis first and leaves the scalar
 case untouched.
 
-Applies to climate-analytics-lab/jax-rrtmgp at v0.2.1 (d7abe2e). Only needed
-when RAD=1; RAD=0 never enters the shortwave solver.
+Applies to the pinned submodule commit, climate-analytics-lab/jax-rrtmgp
+99d2d71. Only needed when RAD=1; RAD=0 never enters the shortwave solver.
 
-Apply with:  git -C /path/to/jax-rrtmgp apply /path/to/this/patch
+This patch is REQUIRED SETUP, not an optional extra: a gitlink pins a commit,
+so the fix cannot live as a submodule working-tree edit. Apply it after
+populating the submodule:
+
+    git submodule update --init
+    git -C models/jax-rrtmgp apply ../../patches/jax-rrtmgp-zenith.patch
+
+Verify with:  grep -q mu_2d models/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py
 
 diff --git a/rrtmgp/rte/monochromatic_two_stream.py b/rrtmgp/rte/monochromatic_two_stream.py
-index e6b0d54..e054c9f 100644
+index e42add6..b9eba89 100644
 --- a/rrtmgp/rte/monochromatic_two_stream.py
 +++ b/rrtmgp/rte/monochromatic_two_stream.py
-@@ -383,8 +383,11 @@ def sw_cell_source(
+@@ -638,8 +638,11 @@ def sw_cell_source(
    t_noscat = jnp.exp(-optical_depth / jnp.cos(zenith))
    mu = jnp.cos(zenith)
  

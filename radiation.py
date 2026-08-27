@@ -28,15 +28,16 @@ composition. They now use the RH/T-dependent wet droplet -- see WET_OPTICS.)
 import os
 import sys
 
-# --- the two sibling dependency repos ---------------------------------------
+# --- the two dependency repos, as submodules under models/ -------------------
 # Duplicated from coupling.py on purpose: radiation.py is imported directly by
 # validation/test_radiation.py and validate_radiation.py, which never load
 # coupling.py, so it cannot rely on coupling having fixed up sys.path first.
 # Keep the two copies in step. See coupling._dep_path for the full rationale.
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_MODELS = os.path.join(_HERE, 'models')
 for _env, _name in (('TOMAS_JAX_PATH', 'tomas-jax'), ('RRTMGP_PATH', 'jax-rrtmgp')):
     for _cand in (os.environ.get(_env),
-                  os.path.join(os.path.dirname(_HERE), _name)):
+                  os.path.join(_MODELS, _name)):
         if _cand and os.path.isdir(_cand):
             if _cand not in sys.path:
                 sys.path.insert(0, _cand)
@@ -57,8 +58,9 @@ except ImportError as _e:
     raise SystemExit(
         f"radiation.py: cannot import a dependency repo ({_e}).\n"
         "  jax-rrtmgp (radiation) and tomas-jax (Mie) are separate repos, NOT\n"
-        "  vendored here. Clone them beside this repo (../jax-rrtmgp,\n"
-        "  ../tomas-jax), install them, or set RRTMGP_PATH / TOMAS_JAX_PATH.\n"
+        "  vendored here. Run `git submodule update --init` to populate\n"
+        "  models/jax-rrtmgp and models/tomas-jax, install them, or set\n"
+        "  RRTMGP_PATH / TOMAS_JAX_PATH.\n"
         "  Run without radiation entirely with RAD=0.")
 
 GRAV   = 9.80665
@@ -67,8 +69,10 @@ SIGMA_SB = 5.670374419e-8
 RRTMGP_PKG = os.path.dirname(rrtmgp_lib.__file__)          # .../jax-rrtmgp/rrtmgp
 RRTMGP_DATA = os.path.join(RRTMGP_PKG, 'optics/rrtmgp_data')
 RRTMGP_TESTDATA = os.path.join(RRTMGP_PKG, 'optics/test_data')
-RI_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       'rad_data/palmer_williams_h2so4.dat')
+# Repo-root-relative, not __file__-relative: the static input data lives in
+# inputs/, which is a sibling of wherever this module sits, not a child of it.
+RI_FILE = os.path.join(_HERE, 'inputs', 'rad_data',
+                       'palmer_williams_h2so4.dat')
 
 CO2_PPM  = float(os.environ.get('CO2_PPM', '380.0'))   # ~2005 value for 1996-2014
 N2O_PPB  = float(os.environ.get('N2O_PPB', '319.0'))
