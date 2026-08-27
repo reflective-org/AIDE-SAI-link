@@ -50,16 +50,3 @@ So it is not dead code exactly — it is a reference implementation with one
 consumer. Deleting it would remove that comparison; keeping it leaves a module
 that must never be imported by anything else. Worth an explicit decision rather
 than a silent one.
-
-## Two one-line CI changes that need `workflow` token scope
-
-**Status:** not applied; they modify `.github/workflows/ci.yml`, which an OAuth
-token without the `workflow` scope cannot push.
-
-1. `ruff check .` descends into the two submodules and reports findings in
-   upstream code this project does not own. Fix: `--exclude models`.
-2. The import check is `python -c "import settling"`, which relied on `settling.py`
-   being at the repo root. Fix: `PYTHONPATH=src/settling`, or point it at
-   `src/_paths`.
-
-The second one makes CI fail until it lands.

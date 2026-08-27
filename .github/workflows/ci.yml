@@ -42,9 +42,15 @@ jobs:
 
       # settling.py imports cleanly on its own (jax + numpy only). coupling.py,
       # radiation.py and plot_run.py cannot be imported here: the first two need
-      # the tomas-jax / jax-rrtmgp sibling repos and plot_run needs cartopy.
+      # the tomas-jax / jax-rrtmgp submodules, which this job does not check out,
+      # and plot_run needs cartopy.
+      #
+      # PYTHONPATH is needed since the 2026-08-27 move into src/. The modules keep
+      # flat top-level names -- src/_paths.py is what puts each src/ subdirectory
+      # on sys.path -- but nothing has imported _paths at this point, so the one
+      # directory this check needs has to be named explicitly.
       - name: import check
-        run: python -c "import settling; print('settling imports OK')"
+        run: PYTHONPATH=src/settling python -c "import settling; print('settling imports OK')"
 
       # Both exit 1 on any failure (see their FAILED lists), so the job status is
       # real. ~12 s and ~2 s on CPU.
@@ -79,5 +85,10 @@ jobs:
       # "organize imports" would hoist those imports above the path setup and
       # break the tree. 33 of the 77 findings from a default ruff run are that
       # rule, and every one of them is a false positive for this layout.
+      # --exclude models: the two dependency submodules live under models/ since
+      # 2026-08-27. CI does not check them out (no `submodules: true` -- nothing
+      # in this job needs them), so they are empty here, but a developer running
+      # `ruff check .` locally would otherwise lint two upstream repos this
+      # project does not own.
       - name: ruff
-        run: ruff check --select=E9,F63,F7,F82 .
+        run: ruff check --select=E9,F63,F7,F82 --exclude models .
