@@ -23,30 +23,34 @@ Where that seam already exists, it is deliberate and worth preserving:
 
 ## Layout
 
-Core modules are **flat on purpose** — `coupling.py` does bare
-`import settling` / `radiation`, and both `coupling.py` and `driver_fast.py` insert
-`fast_advection/` on `sys.path` themselves. Moving them into subdirectories breaks
-those imports.
+Source lives under `src/`, grouped by process, but the **module names stay
+flat on purpose** — `coupling.py` does bare `import settling` / `radiation`, and
+`src/_paths.py` puts each subdirectory on `sys.path` so those imports keep
+resolving. `src/` is not a package; do not add `__init__.py` to a subdirectory
+whose name collides with a module (`src/settling/` vs `settling.py`) without
+converting every import at the same time. See `docs/REPO_LAYOUT.md`.
 
 ```
-coupling.py                 the model: grid, IC/BC, budget, diagnostics, main loop
-driver_fast.py              THE production entry point. Imports coupling.py and swaps in
+src/_paths.py               import-path setup; REPO_ROOT / MODELS / INPUTS anchors
+src/coupling.py             the model: grid, IC/BC, budget, diagnostics, main loop
+src/driver_fast.py          THE production entry point. Imports coupling.py and swaps in
                             two pieces before running it: the tomas_jax.fast batched
                             microphysics engine (replacing coupling's per-cell chain) and
                             fct_lr advection. Separate file, not a flag, because the fast
                             engine has its own API and is hard-fixed at 40 bins.
-fct_core.py                 legacy sealed-face advection. NOT on the run path --
+src/advection/fct_core.py   legacy sealed-face advection. NOT on the run path --
                             coupling.py imports fct_lr directly, so standalone and
                             production use the same transport. Kept solely for the
                             bit-identical legacy check in validation/test_conservation.py.
-settling.py                 gravitational settling; also the canonical wet-droplet
+src/settling/settling.py    gravitational settling; also the canonical wet-droplet
                             sizing (tang_density/wet_size), which radiation.py imports
-radiation.py                RRTMGP + Mie optics
-fast_advection/fct_lr.py    Lin-Rood flux-form advection (the production scheme)
-fast_advection/fct_fast.py  PPM/Zalesak primitives that fct_lr imports
+src/radiation/radiation.py  RRTMGP + Mie optics
+src/advection/fct_lr.py     Lin-Rood flux-form advection (the production scheme)
+src/advection/fct_fast.py   PPM/Zalesak primitives that fct_lr imports
+src/microphysics/tomas_fast.py  the tomas_jax.fast adapter (coupling state <-> FastState)
 inputs/rad_data/            palmer_williams_h2so4.dat (Palmer & Williams 1975,
                             as distributed in HITRAN Aerosols-2016)
-run_prod.sh                 the production launcher (self-documenting header)
+src/run_prod.sh             the production launcher (self-documenting header)
 plot_run.py                 the three post-run figures (dashboard, filmstrip, size dist)
 gif_run.py                  animated versions of the filmstrip panels
 docs/                       CONFIGURATION (every env var), VALIDATION (the harnesses),
@@ -76,7 +80,7 @@ git -C jax-rrtmgp apply ../AIDE-SAI-link/patches/jax-rrtmgp-zenith.patch  # requ
 pip install -r AIDE-SAI-link/requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusable for production
 mkdir -p runs && cd runs                                     # outputs go OUTSIDE the repo
-N_HOURS=6 OUT_TAG=smoke ../AIDE-SAI-link/run_prod.sh         # smoke test first
+N_HOURS=6 OUT_TAG=smoke ../AIDE-SAI-link/src/run_prod.sh         # smoke test first
 ```
 
 **Neither submodule is usable as a plain checkout of its default branch**, and
@@ -128,9 +132,9 @@ runs the code you edited regardless of where you launched it.
 ```bash
 cd <runs dir>                                     # NOT the repo; outputs land here
 REPO=/path/to/AIDE-SAI-link
-INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh   # the 10 Tg/yr scenario, 90 days, ~33 h
-$REPO/run_prod.sh                                    # NO-INJECTION control (INJ_SO2_TG_YR=0)
-RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh   # continue that scenario
+INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh   # the 10 Tg/yr scenario, 90 days, ~33 h
+$REPO/src/run_prod.sh                                    # NO-INJECTION control (INJ_SO2_TG_YR=0)
+RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh   # continue that scenario
 ```
 
 Two checkouts launched from the *same* runs directory with the same `OUT_TAG`
@@ -202,7 +206,7 @@ passes for reasons that do not transfer. See `docs/VALIDATION.md`.
 
 **Run the harnesses by absolute path from wherever the output is, not from the
 repo.** Python puts the *script's* directory on `sys.path`, never the cwd, so
-each one inserts the repo root and `fast_advection/` itself and works from any
+each one inserts the repo root and `src/advection/` itself and works from any
 directory. What they take from the cwd is the checkpoint they read
 (`validate_vpos_f32.py`, `floor_anatomy.py`; override with `STATE=<path>`) and
 where `validate_radiation.py` drops its figure.

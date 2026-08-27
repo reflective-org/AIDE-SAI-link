@@ -20,8 +20,8 @@ import matplotlib.pyplot as plt
 # coupling/radiation live in the repo root, one level up -- see the note in
 # test_radiation.py. sys.path[0] is this file's directory, not the cwd.
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _REPO)
-sys.path.insert(0, os.path.join(_REPO, 'fast_advection'))
+sys.path.insert(0, os.path.join(_REPO, 'src'))
+import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 
 import coupling as C
 import radiation as R

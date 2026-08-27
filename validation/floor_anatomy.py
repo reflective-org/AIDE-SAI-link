@@ -21,8 +21,8 @@ import os as _os
 _REPO = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 
 
-sys.path.insert(0, _REPO)
-sys.path.insert(0, _os.path.join(_REPO, 'fast_advection'))
+sys.path.insert(0, _os.path.join(_REPO, 'src'))
+import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 
 import jax, jax.numpy as jnp
 import xarray as xr

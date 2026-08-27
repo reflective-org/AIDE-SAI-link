@@ -101,7 +101,7 @@
 #   0.94% out of nothing; limited it sits at 0.99987.
 #   NB it also fixes the MASS floor (2.4e6 negative cells in the mass field).
 #
-# NB every example below invokes the launcher as `$REPO/run_prod.sh`, where $REPO
+# NB every example below invokes the launcher as `$REPO/src/run_prod.sh`, where $REPO
 # is wherever this checkout lives. That is not decoration: outputs are written to
 # the CURRENT DIRECTORY and this script REFUSES to run with the repo as $PWD, so
 # every real invocation is from a runs directory by path. See the block above
@@ -122,27 +122,40 @@ set -euo pipefail
 # which put every output beside the source; the repo accumulated 29 GB of .npz that
 # .gitignore hid rather than prevented. Outputs go to the CURRENT DIRECTORY instead
 # -- every output path in coupling.py and plot_run.py is cwd-relative -- so launch
-# from a runs directory outside the repo:
-#   cd <runs dir> && INJ_SO2_TG_YR=10 OUT_TAG=prod90d /path/to/repo/run_prod.sh
+# from a run directory under runs/:
+#   mkdir -p runs/prod90d && cd runs/prod90d
+#   INJ_SO2_TG_YR=10 OUT_TAG=prod90d /path/to/repo/src/run_prod.sh
 # Nothing on the import path needs the cwd: coupling.py resolves tomas-jax and
-# jax-rrtmgp from its own __file__ (_dep_path/_HERE), radiation.py resolves
+# jax-rrtmgp from its own __file__ (_dep_path/_paths), radiation.py resolves
 # inputs/rad_data/ the same way, and python3 puts the script's own directory on sys.path.
 #
 # TRADEOFF, stated plainly: the old `cd` also meant two checkouts could not collide,
 # because each wrote into itself. Now they collide if both are launched from the same
 # runs directory with the same OUT_TAG. OUT_TAG discipline (see above) is what keeps
 # runs apart -- it already had to, since one checkout can overwrite its own results.
-HERE="$(dirname "$(readlink -f "$0")")"
+HERE="$(dirname "$(readlink -f "$0")")"      # src/
+REPO="$(dirname "$HERE")"                    # the checkout
 
-# Refuse to write into the repo. This is the whole point of the change above, and
-# it fails INVISIBLY otherwise: .npz/.png are gitignored, so a run launched from the
-# wrong directory looks completely normal and just quietly re-pollutes the tree.
-if [[ "$(readlink -f "$PWD")" == "$HERE" ]]; then
-    echo "run_prod.sh: refusing to run with the repo itself as the working directory." >&2
+# Refuse to write into the source tree. This is the whole point of the change above,
+# and it fails INVISIBLY otherwise: .npz/.png are gitignored, so a run launched from
+# the wrong directory looks completely normal and just quietly re-pollutes the tree.
+#
+# The test was `$PWD == $HERE` until 2026-08-27, when this script moved into src/.
+# That comparison would then have caught only src/ itself and happily written a 5 GB
+# checkpoint cycle into the repo ROOT -- the exact directory it exists to protect.
+# So the rule is now "anywhere inside the checkout except under runs/", which is
+# also what makes the documented `cd runs/<tag>` workflow legal.
+_PWD_REAL="$(readlink -f "$PWD")"
+_RUNS="$REPO/runs"   # $REPO is already canonical: dirname of a readlink -f
+if [[ "$_PWD_REAL" == "$REPO" || "$_PWD_REAL" == "$REPO"/* ]] \
+   && [[ "$_PWD_REAL" != "$_RUNS" && "$_PWD_REAL" != "$_RUNS"/* ]]; then
+    echo "run_prod.sh: refusing to run from inside the source tree." >&2
+    echo "             \$PWD = $_PWD_REAL" >&2
     echo "             Outputs are written to \$PWD, and they do not belong in the" >&2
-    echo "             source tree. Launch from a runs directory instead:" >&2
-    echo "                 cd <a directory outside the repo>" >&2
-    echo "                 $(readlink -f "$0")" >&2
+    echo "             source tree. Launch from a run directory instead:" >&2
+    echo "                 mkdir -p $REPO/runs/<tag> && cd \$_" >&2
+    echo "                 OUT_TAG=<tag> $(readlink -f "$0")" >&2
+    echo "             (a directory outside the checkout entirely also works)" >&2
     exit 2
 fi
 
@@ -153,7 +166,7 @@ fi
 # stopped at 90 days. Defaults are unchanged, so a bare run_prod.sh is the same
 # run it has always been.
 # To push the 90-day run out to a full year:
-#   RESUME=1 N_HOURS=8760 OUT_TAG=prod1yr $REPO/run_prod.sh
+#   RESUME=1 N_HOURS=8760 OUT_TAG=prod1yr $REPO/src/run_prod.sh
 # after seeding the prod1yr checkpoints from the prod90d ones.
 #
 # FAST_SORT is overridable for the same reason: an OOM fallback that relaunches with
@@ -181,14 +194,14 @@ fi
 #                  45N and 45S; the TOTAL is 10, not doubled). No-op at INJ_LAT=0.
 #
 # REPRODUCING the prod90d / prod1yr runs now needs the amount stated explicitly:
-#   INJ_SO2_TG_YR=10 OUT_TAG=prod90d GPU=0 $REPO/run_prod.sh
+#   INJ_SO2_TG_YR=10 OUT_TAG=prod90d GPU=0 $REPO/src/run_prod.sh
 #
 # ALWAYS pair a scenario with its own OUT_TAG -- outputs and checkpoints are keyed
 # by it, so reusing a tag overwrites the other scenario's results. coupling.py
 # refuses a RESUME onto a checkpoint whose injection config differs, which catches
 # the dangerous half of that mistake but not a fresh-run overwrite.
-#   OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 GPU=0 $REPO/run_prod.sh
-#   OUT_TAG=inj5_eq_pt INJ_SO2_TG_YR=5 INJ_ZONAL=0 INJ_LON=120 GPU=0 $REPO/run_prod.sh
+#   OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 GPU=0 $REPO/src/run_prod.sh
+#   OUT_TAG=inj5_eq_pt INJ_SO2_TG_YR=5 INJ_ZONAL=0 INJ_LON=120 GPU=0 $REPO/src/run_prod.sh
 # The resolved geometry is echoed in the run header ("SAI injection: ... at ...").
 # ============================================================================
 # ENVIRONMENT -- inlined 2026-08-04

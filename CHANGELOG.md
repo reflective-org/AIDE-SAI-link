@@ -34,8 +34,19 @@ Changed
   submodule layout. Following the old instructions would have produced a tree
   the resolver does not look at.
 
+- `src/` — all source needed to advance the coupled state, grouped by process:
+  `coupling.py`, `driver_fast.py`, `run_prod.sh`, `advection/`, `radiation/`,
+  `settling/`, `microphysics/`. Module names stay flat and **no import statement
+  changed**; `src/_paths.py` puts the subdirectories on `sys.path`.
+- `src/microphysics/tomas_fast.py` — the `tomas_jax.fast` adapter, extracted from
+  `driver_fast.py` so every coupled process has a home under `src/`.
+- `run_prod.sh` refuses to run from anywhere inside the checkout except under
+  `runs/`. The old test was `$PWD == <script dir>`; from `src/` that would no
+  longer have protected the repo root.
+
 Removed
 
 - `rad_data/` at the repo root (moved to `inputs/rad_data/`).
+- `fast_advection/` (moved to `src/advection/`).
 - `sai_runs/` beside the repo, and the loose `coupled_*prod1d*` artifacts in its
   parent directory (moved to `runs/smoke/` and `runs/prod1d/`; nothing deleted).

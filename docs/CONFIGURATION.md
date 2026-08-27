@@ -13,11 +13,11 @@ any log is self-describing. Set them by prefixing the launcher:
 ```bash
 REPO=$PWD/AIDE-SAI-link                    # wherever this clone lives -- must be ABSOLUTE, the next line cd's away
 cd "$PWD/sai_runs"                         # launch from a runs dir, NOT the repo
-OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/run_prod.sh
+OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/src/run_prod.sh
 ```
 
 Anything not listed in `run_prod.sh`'s own prefix block simply passes through
-from your environment — `AER_SRC=carma $REPO/run_prod.sh` works. The exception:
+from your environment — `AER_SRC=carma $REPO/src/run_prod.sh` works. The exception:
 
 > [!IMPORTANT]
 > `run_prod.sh` **hard-sets** `INIT_BIN=so4`, `STATE_CKPT=1`, `FRAME_EVERY=24`,
@@ -45,8 +45,8 @@ paths run the same code for it.
 
 | you launched | microphysics knobs that are live | the ones that do nothing |
 |---|---|---|
-| `run_prod.sh` or `python3 driver_fast.py` — **the normal case** | `ALPHA_COND`, `FAST_DT`, `FAST_CELL_CAP`, `FAST_SORT`, `FAST_FN_SCALE`, `FAST_COAG_SUB_CAP`, `FAST_COND_SUB_CAP`, `FAST_COAG_CMAX` | `MICRO_SUBSTEPS`, `N_COAG_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, all `NUC_*` |
-| `python3 coupling.py` — standalone/dev only | `MICRO_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, `ALPHA_COND`, `NUC_ORG`, `NUC_NH3`, `NUC_FION`, `NUC_FN_MAX` | every `FAST_*` |
+| `run_prod.sh` or `python3 src/driver_fast.py` — **the normal case** | `ALPHA_COND`, `FAST_DT`, `FAST_CELL_CAP`, `FAST_SORT`, `FAST_FN_SCALE`, `FAST_COAG_SUB_CAP`, `FAST_COND_SUB_CAP`, `FAST_COAG_CMAX` | `MICRO_SUBSTEPS`, `N_COAG_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, all `NUC_*` |
+| `python3 src/coupling.py` — standalone/dev only | `MICRO_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, `ALPHA_COND`, `NUC_ORG`, `NUC_NH3`, `NUC_FION`, `NUC_FN_MAX` | every `FAST_*` |
 
 The two engines also differ *physically*, not just in speed: the fast engine's
 nucleation is **binary** (H2SO4–H2O only), which is why it has no `NUC_ORG` /

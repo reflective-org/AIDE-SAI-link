@@ -13,8 +13,8 @@ import numpy as np
 # no matter where you launch from (it did, from the 2026-07-29 move until
 # 2026-07-30).
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _REPO)
-sys.path.insert(0, os.path.join(_REPO, 'fast_advection'))
+sys.path.insert(0, os.path.join(_REPO, 'src'))
+import _paths                      # noqa: E402 -- puts src/ subdirs on sys.path
 
 import coupling as C
 import radiation as R

@@ -188,18 +188,18 @@ RUNS=$PWD/sai_runs                 # anywhere BUT the repo
 mkdir -p "$RUNS" && cd "$RUNS"
 
 # 1-step smoke test: N_HOURS=6 is one 6 h coupling step, ~6 min on an H100.
-N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/run_prod.sh
+N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/src/run_prod.sh
 python3 $REPO/plot_run.py smoke               # -> smoke_{dashboard,filmstrip,sizedist}.png
 
 # the production scenario: 10 Tg SO2/yr equatorial ring, 90 days.
 # N_HOURS=2160 (2160 h / 6 h = 360 steps = 90 days) is run_prod.sh's default,
 # so it is written out here only to make the run length explicit.
-N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh          # ~33-36 h on one H100
-RESUME=1 N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/run_prod.sh # continue after a kill
+N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh          # ~33-36 h on one H100
+RESUME=1 N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh # continue after a kill
 python3 $REPO/plot_run.py prod90d
 
 # a full year is the same launcher with a longer clock (8760 h = 365 days, ~140 h)
-RESUME=1 N_HOURS=8760 INJ_SO2_TG_YR=10 OUT_TAG=prod1yr $REPO/run_prod.sh
+RESUME=1 N_HOURS=8760 INJ_SO2_TG_YR=10 OUT_TAG=prod1yr $REPO/src/run_prod.sh
 ```
 
 Run length is set **in hours**, always: `N_HOURS` counts forcing hours from
@@ -238,7 +238,7 @@ in the run header, so any log is self-describing. Set them by prefixing the
 launcher:
 
 ```bash
-OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/run_prod.sh
+OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/src/run_prod.sh
 ```
 
 **The complete reference is [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** —
@@ -252,7 +252,7 @@ defaults for a reason — change them only with `MANIFEST.md` open.
 
 | you want to | set |
 |---|---|
-| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 $REPO/run_prod.sh` |
+| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 $REPO/src/run_prod.sh` |
 | run its control | the same, minus `INJ_SO2_TG_YR` (it defaults to 0) |
 | continue after a kill or crash | add `RESUME=1`, and **repeat the same `INJ_*` and `OUT_TAG`** |
 | move the injection | `INJ_HPA`, `INJ_LAT` (+ `INJ_MIRROR=1` for a two-hemisphere ring) |
