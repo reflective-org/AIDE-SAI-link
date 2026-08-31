@@ -105,7 +105,7 @@ import jax.numpy as jnp
 # SO2 oxidation at all -- in every OH_SZA=1 run. coupling.py now owns the fit.
 
 import coupling as C
-from fct_fast import advect_hour_batch as _fast_advect
+from fct_fast import advect_step_batch as _fast_advect
 # The tomas_jax.fast adapter. MUST be imported here, BELOW the
 # os.environ.setdefault block above and not at the top of the file: it imports
 # coupling.py, and coupling.py reads the environment at import time, so hoisting
@@ -127,10 +127,10 @@ _ADV_DTYPE = jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float
 #        caps). Residual ~3e-4/day; cheaper. Kept as the validated fallback.
 _ADV_SCHEME = os.environ.get('ADV_SCHEME', 'lr').lower()
 if _ADV_SCHEME == 'lr':
-    from fct_lr import advect_hour_batch as _adv_fn
+    from fct_lr import advect_step_batch as _adv_fn
 else:
     _adv_fn = _fast_advect
-C.advect_hour_batch = functools.partial(_adv_fn, cfl=_ADV_CFL, dtype=_ADV_DTYPE)
+C.advect_step_batch = functools.partial(_adv_fn, cfl=_ADV_CFL, dtype=_ADV_DTYPE)
 
 # ---- the ONE micro swap; advection already swapped above --------------------
 C.run_microphysics_full = run_microphysics_full_fast

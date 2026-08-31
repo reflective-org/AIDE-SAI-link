@@ -75,7 +75,7 @@ Options, in increasing effort:
    resolved rows* (e.g. 78–80°) on a few-day timescale. Self-contained (no
    external data at all), keeps the caps numerically tame, and lets SAI
    aerosol accumulate over the poles instead of vanishing. Cheap to
-   implement inside `advect_hour_batch`'s existing `qfroz` mechanism —
+   implement inside `advect_step_batch`'s existing `qfroz` mechanism —
    build `qfroz` polar rows from the model state itself.
 2. **Polar filter**: damp high zonal wavenumbers poleward of ~75° (FFT along
    lon is cheap in JAX) so the CFL constraint relaxes and LAT_FREEZE can move

@@ -102,7 +102,7 @@ def test_grid_spacing():
     T = 6 * 3600.0
     out = {}
     for tag, dxfix in (('fixed', True), ('legacy', False)):
-        q, _ = F.advect_hour_batch(jnp.asarray(q0), u, v, w, u, v, w, lat=lat,
+        q, _ = F.advect_step_batch(jnp.asarray(q0), u, v, w, u, v, w, lat=lat,
                                    dp=dp, qfrozb=jnp.zeros_like(jnp.asarray(q0)),
                                    lat_freeze=80.0, cfl=0.2, dt_total=T,
                                    metric=True, dxfix=dxfix, polar_mode='zonal',
@@ -179,7 +179,7 @@ def test_polar_cap_survives_x_sweep():
     wgt = ac[None, :, None] * dp[:, None, None]
     pol = np.abs(lat) > 80.0
 
-    q, _ = F.advect_hour_batch(jnp.asarray(q0), u, v, w, u, v, w, lat=lat, dp=dp,
+    q, _ = F.advect_step_batch(jnp.asarray(q0), u, v, w, u, v, w, lat=lat, dp=dp,
                                qfrozb=jnp.asarray(q0), lat_freeze=80.0, cfl=0.5,
                                dt_total=6 * 3600.0, metric=True, dxfix=True,
                                polar_mode='zonal', wcont=False)
@@ -285,7 +285,7 @@ def test_linrood_dropin():
     M0 = (q0[0] * wgt).sum()
     q = jnp.asarray(q0); ft = fb = 0.0
     for _ in range(2):
-        q, ns, vf = L.advect_hour_batch(q, u, v, w, u, v, w, lat=lat, dp=dp,
+        q, ns, vf = L.advect_step_batch(q, u, v, w, u, v, w, lat=lat, dp=dp,
                                         qfrozb=jnp.asarray(q0), lat_freeze=80.0,
                                         cfl=0.5, dt_total=6 * 3600.0,
                                         polar_mode='zonal', return_vflux=True)
@@ -301,7 +301,7 @@ def test_linrood_dropin():
     # divergence, the air mass must stay near 1. This is the number that says
     # whether flux form is trustworthy for a given wind source -- if a future
     # emulator wind drives rho toward 0, q = rho*q/rho loses precision.
-    _, _, _, rho = L.advect_hour_batch(jnp.asarray(q0), u, v, w, u, v, w,
+    _, _, _, rho = L.advect_step_batch(jnp.asarray(q0), u, v, w, u, v, w,
                                        lat=lat, dp=dp, qfrozb=jnp.asarray(q0),
                                        lat_freeze=80.0, cfl=0.5,
                                        dt_total=6 * 3600.0, polar_mode='zonal',

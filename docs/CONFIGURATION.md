@@ -92,7 +92,7 @@ line, they are not read back.
 | `RESUME` | `0` | `1` = continue from `coupled_state_<TAG>_ckpt.npz` |
 | `STATE_CKPT` | `1` | write the restart checkpoint (~400 MB, atomic, overwritten in place) |
 | `FRAME_EVERY` | `24` | hours between frame + checkpoint writes |
-| `LOG_EVERY` | `1` | progress line every N hours |
+| `LOG_EVERY` | `1` | progress line every N coupling steps (N x `STEP_HOURS` hours) |
 | `PROBE_HPA` | `50` | level [hPa] used for frames and probe diagnostics |
 | `DIAG_CORE_HPA` | *(unset)* | `lo,hi` diagnostic core window; unset = symmetric −1 level per end (1.6–121.5 hPa) |
 | `DEBUG` | `1` | verbose per-step budget/diagnostic output |

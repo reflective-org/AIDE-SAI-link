@@ -30,12 +30,12 @@ Initialization: CESM MAM4 modal aerosol (num_a{1,2,3}, so4_a{1,2,3}) is binned
 onto the 40-bin TOMAS grid via per-mode dry log-normal distributions.
 
 Open vertical boundaries (same rationale as ../advection/fct_openbc.py): the
-top N_BC_TOP and bottom N_BC_BOT band levels are reset every hour to hourly
-CESM MAM4 aerosol binned onto the TOMAS grid. These reservoirs carry the net
-effect of all the physics outside/off in this MVP (emissions, nucleation,
+top N_BC_TOP and bottom N_BC_BOT band levels are reset every coupling step to
+the hourly CESM MAM4 aerosol binned onto the TOMAS grid. These reservoirs
+carry the net effect of all the physics outside/off in this MVP (emissions, nucleation,
 condensation, wet removal), giving a flux-through system instead of a sealed
-one. The polar caps (|lat| > LAT_FREEZE) are likewise refreshed to hourly MAM4
-rather than frozen at the IC. Number and mass are always pinned as a
+one. The polar caps (|lat| > LAT_FREEZE) are likewise refreshed from MAM4 every
+step rather than frozen at the IC. Number and mass are always pinned as a
 consistent (Nk, Mk) pair from the same binning, never rescaled separately.
 NO global mass fixer: with open boundaries the burden legitimately changes.
 
@@ -163,7 +163,7 @@ from tomas_jax.physics.ezcond_ppm_jax import ezcond_ppm_jax
 import settling
 
 # --- advection: fct_lr, the production scheme, at the production config --------
-# This used to be `from fct_core import advect_hour_batch`, i.e. the legacy
+# This used to be `from fct_core import advect_step_batch`, i.e. the legacy
 # sealed-face sweep. Nothing ever ran it: driver_fast.py rebinds this module's
 # global to fct_lr before main() starts, so the only way to reach fct_core was to
 # run coupling.py bare -- which silently gave you DIFFERENT transport (sealed
@@ -182,8 +182,8 @@ import settling
 # treatment -- see the note at that probe.
 import functools
 import fct_lr                      # src/advection/, put on sys.path by _paths
-advect_hour_batch = functools.partial(
-    fct_lr.advect_hour_batch,
+advect_step_batch = functools.partial(
+    fct_lr.advect_step_batch,
     cfl=float(os.environ.get('ADV_CFL', '0.5')),
     dtype=jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float64)
 
@@ -502,7 +502,7 @@ ARF_AVG_H  = float(os.environ.get('ARF_AVG_H', '24'))
 # always from the same step and restore consistently.
 STATE_CKPT = os.environ.get('STATE_CKPT', '1') != '0'
 RESUME     = os.environ.get('RESUME', '0') != '0'
-LOG_EVERY  = int(os.environ.get('LOG_EVERY', '1'))    # progress line every N hours
+LOG_EVERY  = int(os.environ.get('LOG_EVERY', '1'))    # progress line every N steps
 FRAME_EVERY = int(os.environ.get('FRAME_EVERY', '24'))  # save size-bin snapshot every N hours
 OUT_TAG    = os.environ.get('OUT_TAG', f'{N_DAYS}day')
 
@@ -546,7 +546,7 @@ _INIT_BIN = os.environ.get('INIT_BIN', 'so4').lower()
 N_HOURS   = int(os.environ.get('N_HOURS', 24 * N_DAYS))   # override for smoke tests
 
 # Aerosol IC / boundary-fill source: 'mam4' (default) bins CESM MAM4 modes onto
-# the TOMAS grid at every hour (evolving reservoir). 'carma' projects a CARMA
+# the TOMAS grid at every coupling step (evolving reservoir). 'carma' projects a CARMA
 # sulfate size distribution (PRSUL pure + MXAER mixed-group sulfate) onto the
 # grid ONCE as a static reservoir (the CARMA run is a different epoch -- 1991
 # pre-Pinatubo background -- so it is not time-matched to the CESM meteorology;
@@ -681,8 +681,8 @@ def bin_mam4(ds_by_var, t, levs, lat_idx=None):
     lat_idx : optional latitude indices (default: all latitudes)
     Returns num (NBINS,nlev_s,nlat_s,nlon)  [#/kg]
             mas (NBINS,nlev_s,nlat_s,nlon)  [kg/kg]
-    Used for the IC (all levels), the hourly open-BC slabs (edge levels) and
-    the hourly polar-cap refresh (all levels, polar lats). num/mas always come
+    Used for the IC (all levels), the per-step open-BC slabs (edge levels) and
+    the per-step polar-cap refresh (all levels, polar lats). num/mas always come
     from the same binning so each bin's (Nk, Mk) pair is physically consistent.
     """
     def read(var):
@@ -1052,7 +1052,7 @@ _micro_pmap = jax.pmap(jax.vmap(_micro_cell, in_axes=(0,) * 8))
 
 
 def run_microphysics(num, mas, temp3d, pres3d, wgt3d):
-    """Advance coagulation one hour over the whole band.
+    """Advance coagulation one coupling step (DT_MICRO) over the whole band.
 
     num, mas : (NBINS, nlev, nlat, nlon) mixing ratios
     temp3d   : (nlev,nlat,nlon) [K]      pres3d: (nlev,nlat,nlon) [Pa]
@@ -1492,7 +1492,7 @@ def main():
     # aer_fill(t, levs, lat_idx) returns (num[#/kg], mas[kg/kg]) with the SAME
     # signature and (num,mas) consistency as bin_mam4, so the IC / open-BC /
     # polar / radiation-reference call sites are source-agnostic. MAM4 re-bins
-    # per hour (t used); CARMA is a static reservoir built once (t ignored).
+    # per step (t used); CARMA is a static reservoir built once (t ignored).
     if AER_SRC == 'carma':
         print(f"=== initializing size bins from CARMA (frame {CARMA_FRAME}, "
               f"rho={CARMA_RHO:.0f}) ===", flush=True)
@@ -1524,8 +1524,8 @@ def main():
           f"init N burden(sum num)={float(num.sum()):.3e}, "
           f"M burden(sum mas)={float(mas.sum()):.3e}", flush=True)
 
-    # polar freeze target; starts at the IC and is refreshed to hourly MAM4
-    # at the end of each hour (so hour h advects against hour-h polar values)
+    # polar freeze target; starts at the IC and is refreshed from MAM4 at the
+    # end of each step (so a step advects against its own end-hour polar values)
     # (gases ride along in the same stack: rows 2*NBINS and 2*NBINS+1)
     qfroz = jnp.concatenate([num, mas, so2[None], h2so4[None]], axis=0)  # (ntr,nlev,nlat,nlon)
     # apply the bottom-face aerosol inflow scaling to step 0 as well (the per-step
@@ -1539,7 +1539,7 @@ def main():
     lev_bot = klevs[-N_BC_BOT:]
 
     # Can the active advection driver report the vertical face exchange? The fast
-    # drivers monkeypatch advect_hour_batch, so ask the object we actually hold
+    # drivers monkeypatch advect_step_batch, so ask the object we actually hold
     # rather than assuming. fct_lr (the default since 2026-08-03, and what
     # driver_fast.py rebinds to) can; the legacy sealed-face fct_core cannot, so
     # this answers False only if something restores that import by hand.
@@ -1549,7 +1549,7 @@ def main():
     import inspect
     try:
         ADV_VFLUX = ('return_vflux' in
-                     inspect.signature(advect_hour_batch).parameters) and ADV_WCONT
+                     inspect.signature(advect_step_batch).parameters) and ADV_WCONT
     except (TypeError, ValueError):
         ADV_VFLUX = False
     # With ADV_WCONT the vertical faces are a real FLUX boundary (inflow at the
@@ -2124,7 +2124,7 @@ def main():
             h2so4 = h2so4 + inj_dq_h2so4
             inj_h2so4_cum += float((inj_dq_h2so4 * A_j).sum())
 
-        # budget checkpoint: burden at the start of this hour (== end of prev)
+        # budget checkpoint: burden at the start of this step (== end of prev)
         M_start_np = Mbur(mas, 'np'); M_start_pol = Mbur(mas, 'pol')
 
         # ---- 1. transport (advect all 82 tracers with shared winds) ----
@@ -2139,7 +2139,7 @@ def main():
         if ADV_VFLUX:
             akw['return_vflux'] = True
         if step == ntr_all:
-            out = advect_hour_batch(qb, u0, v0, w0, u1, v1, w1,
+            out = advect_step_batch(qb, u0, v0, w0, u1, v1, w1,
                                     qfrozb=qfroz, **akw)
             qb, nsub, vfl = out if ADV_VFLUX else (out[0], out[1], None)
         else:
@@ -2148,7 +2148,7 @@ def main():
             outs = []; vfs = []
             for a in range(0, ntr_all, step):
                 b = min(a + step, ntr_all)
-                out = advect_hour_batch(qb[a:b], u0, v0, w0, u1, v1, w1,
+                out = advect_step_batch(qb[a:b], u0, v0, w0, u1, v1, w1,
                                         qfrozb=qfroz[a:b], **akw)
                 outs.append(out[0]); nsub = out[1]
                 if ADV_VFLUX:
@@ -2176,7 +2176,7 @@ def main():
         num = qb[:NBINS]; mas = qb[NBINS:2*NBINS]
         so2 = qb[2*NBINS]; h2so4 = qb[2*NBINS + 1]
         # post-advection, pre-floor: separates transport (non-polar) from the
-        # polar-cap overwrite (both happen inside advect_hour_batch)
+        # polar-cap overwrite (both happen inside advect_step_batch)
         M_adv = Mbur(mas); M_adv_np = Mbur(mas, 'np'); M_adv_pol = Mbur(mas, 'pol')
         #post-advection floor. The MASS floor is budgeted below (cumB['floor']);
         #the NUMBER floor was not, and it is the bigger one: the ultrafine number
@@ -2344,7 +2344,7 @@ def main():
             so2   = so2.at[-N_BC_BOT:].set(jnp.asarray(so2_bot))
             h2so4 = h2so4.at[-N_BC_BOT:].set(jnp.asarray(h2so4_bot))
         #burden after the BC refill
-        M_bc = Mbur(mas)                           # after open-BC refill (== hour-end burden)
+        M_bc = Mbur(mas)                           # after open-BC refill (== step-end burden)
 
         # ---- staged mass budget: accumulate each source (normalized by M0) ----
         # checkpoints telescope, so sum(cumB) == M/M0 - 1 exactly.

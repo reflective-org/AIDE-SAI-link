@@ -232,9 +232,11 @@ In practice you set nothing: `validate_vpos_f32.py` already defaults to
 `ADV_CFL=0.5` / `ADV_F32=1`, and `coupling.py` and `driver_fast.py` pin the same
 values explicitly, so the `ADV_F32=1 ADV_CFL=0.5` prefix these commands once
 carried is a no-op. The rule binds in exactly one place: calling
-`fct_lr.advect_hour_batch` **directly**, e.g. from a new test. Its signature
+`fct_lr.advect_step_batch` **directly**, e.g. from a new test. Its signature
 defaults (`cfl=0.2`, `float64`) are a configuration no run uses, so a bare call
-passes for reasons that do not transfer. See `docs/VALIDATION.md`.
+passes for reasons that do not transfer. `dt_total` has no default at all — it
+is the coupling step (`STEP_SEC`), and the 1 h default it used to carry made a
+caller who omitted it advect a sixth of the interval, silently. See `docs/VALIDATION.md`.
 
 **Run the harnesses by absolute path from wherever the output is, not from the
 repo.** Python puts the *script's* directory on `sys.path`, never the cwd, so

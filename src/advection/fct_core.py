@@ -1,13 +1,13 @@
 """Flux-corrected PPM transport core (extracted from ../advection/fct.py).
 
 Contains ONLY the pure, side-effect-free transport functions plus a batched
-wrapper `advect_hour_batch` that advects a stack of tracer fields
+wrapper `advect_step_batch` that advects a stack of tracer fields
 (shape (ntracer, nlev, nlat, nlon)) with a single shared CESM wind field.
 
 The single-tracer functions are copied verbatim from fct.py so the coupled
 model reproduces the validated advection scheme exactly.
 
-SPEED (2026-07-15): the batched hour driver was restructured to match the
+SPEED (2026-07-15): the batched step driver was restructured to match the
 device-loop idea in ../advection/fct_openbc_6hsub_fast.py. The whole n-substep
 loop -- including the linear-in-time wind interpolation -- now runs on-device
 inside ONE jitted lax.fori_loop, batched over the tracer axis. Winds are
@@ -264,7 +264,7 @@ def _step_3d_batch(qb, u, v, w, dt, nv, lat, dp, polar, qfrozb):
 # The entire n-substep integration for one coupling step runs inside ONE jitted
 # fori_loop, batched over the tracer axis. dt_sub, n and nv are passed as traced
 # scalars (NOT static), so this compiles exactly once no matter how the CFL
-# substep count varies hour to hour. The per-substep math below is identical to
+# substep count varies step to step. The per-substep math below is identical to
 # the old Python-loop driver -- speed only, numerics unchanged.
 @jit
 def _advect_step_dev_batch(qb, u0, v0, w0, u1, v1, w1, dt_sub, n, nv,
@@ -281,14 +281,16 @@ def _advect_step_dev_batch(qb, u0, v0, w0, u1, v1, w1, dt_sub, n, nv,
     return jax.lax.fori_loop(0, n, body, qb)
 
 
-def advect_hour_batch(qb0, u0, v0, w0, u1, v1, w1,
-                      lat, dp, qfrozb, lat_freeze=80.0,
-                      cfl=0.2, dt_total=3600.0):
-    """Advect a STACK of tracers qb0 (ntracer,nlev,nlat,nlon) over one hour.
+def advect_step_batch(qb0, u0, v0, w0, u1, v1, w1,
+                      lat, dp, qfrozb, dt_total, lat_freeze=80.0,
+                      cfl=0.2):
+    """Advect a STACK of tracers qb0 (ntracer,nlev,nlat,nlon) over dt_total.
 
-    Winds are linearly interpolated between the hour endpoints (u0->u1 etc.),
-    exactly as in fct.advect_hour_jax. Sub-step count is set by the CFL of the
-    (shared) wind field, so every tracer uses the same stepping.
+    dt_total is the coupling step (coupling.STEP_SEC), NOT one hour: u0/w0 and
+    u1/w1 are the CESM wind snapshots bracketing that step, and the winds are
+    linearly interpolated between them at each substep midpoint. Sub-step count
+    is set by the CFL of the (shared) wind field, so every tracer uses the same
+    stepping.
     """
     lat_np = np.asarray(lat)
     dp_np  = np.asarray(dp)

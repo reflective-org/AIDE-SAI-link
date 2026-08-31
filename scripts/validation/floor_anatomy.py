@@ -127,7 +127,7 @@ dlam = 2.0 * np.pi / nlon
 dphi = float(lat[1] - lat[0]) * DEG
 dp_j = jnp.asarray(DP)
 
-# substep count exactly as advect_hour_batch computes it
+# substep count exactly as advect_step_batch computes it
 keep = np.abs(lat) <= LAT_FREEZE
 umax = max(float(np.abs(u0[:, keep]).max()), float(np.abs(u1[:, keep]).max()))
 vmax = max(float(np.abs(v0).max()), float(np.abs(v1).max()))
@@ -189,13 +189,13 @@ print('Q1-Q3  FULL 6h STEP: per-bin, per-level anatomy of the floor')
 print('=' * 72)
 qb = jnp.asarray(num)
 qfroz = jnp.asarray(num)
-out = fct_lr.advect_hour_batch(qb, jnp.asarray(u0), jnp.asarray(v0), jnp.asarray(w0),
+out = fct_lr.advect_step_batch(qb, jnp.asarray(u0), jnp.asarray(v0), jnp.asarray(w0),
                                jnp.asarray(u1), jnp.asarray(v1), jnp.asarray(w1),
                                lat=lat, dp=DP, qfrozb=qfroz,
                                lat_freeze=LAT_FREEZE, dt_total=STEP_SEC,
                                return_vflux=True)
 adv = np.asarray(out[0])
-print(f'  advect_hour_batch returned, nsub={out[1]}')
+print(f'  advect_step_batch returned, nsub={out[1]}')
 
 N_pre = burden(adv)
 N_post = burden(np.maximum(adv, 0.0))

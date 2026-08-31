@@ -75,15 +75,15 @@ model levels**, 1,327,104 cells). The band is set by `P_LO_HPA` / `P_HI_HPA`.
    bin can arrive with `Nk>0, mass≈0`. Before coagulating, each bin's mean
    particle mass is clipped into `[xk_k, xk_{k+1}]` (empty bins → 0), keeping
    `Dp` finite and well posed. The clip is *not* mass-conserving, so its
-   activity is monitored: the hourly log prints `clipM/M0 +add/-remove` for
-   the current hour, and the timeseries saves cumulative totals
+   activity is monitored: the per-step log prints `clipM/M0 +add/-remove` for
+   the current step, and the timeseries saves cumulative totals
    (`clipMadd_cum`/`clipMrem_cum`, burden-weighted; `M0` included for
    normalization). These should stay ≪ M0 — growth means the limiter is
    decoupling the two moments faster than the physics justifies.
 6. **Open vertical boundaries** (same rationale as `../advection/fct_openbc.py`).
-   The top `N_BC_TOP` and bottom `N_BC_BOT` band levels are reset every hour to
-   hourly CESM MAM4 binned onto the TOMAS grid. These Dirichlet reservoirs carry
-   the net effect of all physics outside the band (emissions, wet removal, and
+   The top `N_BC_TOP` and bottom `N_BC_BOT` band levels are reset every coupling
+   step to the hourly CESM MAM4 binned onto the TOMAS grid. These Dirichlet
+   reservoirs carry the net effect of all physics outside the band (emissions, wet removal, and
    everything below the tropopause), making the band a flux-through system
    rather than a sealed one. Number and mass are always pinned as a
    consistent `(Nk, Mk)` pair from one binning — never rescaled separately.
@@ -118,7 +118,7 @@ these commands — see MANIFEST.md. Direct `coupling.py` invocation is the
 standalone/dev path:
 
 ```bash
-# short validation (default 2 days, hourly), single GPU
+# short validation (default 2 days at STEP_HOURS=6), single GPU
 N_DAYS=2 OUT_TAG=2day CUDA_VISIBLE_DEVICES=0 python3 src/coupling.py
 python3 scripts/utils/plot_run.py 2day
 
@@ -143,12 +143,12 @@ N_DAYS=365 OUT_TAG=1yr python3 src/coupling.py
 | `N_DAYS` / `N_HOURS` | 2 / — | run length (`N_HOURS` overrides) |
 | `N_LEV` | 0 (full band) | sub-sample the band to ~N_LEV native levels (e.g. `17` to mimic PARADIS) |
 | `H0` | 0 | start hour index into the h1 series (1996-01-01 00Z) |
-| `N_COAG_SUBSTEPS` | 3 | forward-Euler substeps per hour (legacy `MICRO=coag` path) |
+| `N_COAG_SUBSTEPS` | 3 | forward-Euler substeps per coupling step (legacy `MICRO=coag` path) |
 | `CELL_CHUNK` | 300000 | cells per microphysics vmap batch (GPU memory vs speed) |
 | `N_BC_TOP` | 1 | top band levels pinned to hourly MAM4 (open BC) |
 | `N_BC_BOT` | 1 | bottom band levels pinned to hourly MAM4 (open BC) |
 | `PROBE_HPA` | 50 | level [hPa] used for diagnostics, frames, mean-Dp |
-| `LOG_EVERY` | 1 | print a progress line every N simulated hours |
+| `LOG_EVERY` | 1 | print a progress line every N coupling steps |
 | `FRAME_EVERY` | 24 | save a probe-level size-bin snapshot every N hours |
 | `OUT_TAG` | `<N_DAYS>day` | output filename tag |
 | `PROFILE` | — | print per-hour phase timing (read / advect / micro / bc+polar) |
