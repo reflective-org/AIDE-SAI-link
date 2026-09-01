@@ -9,20 +9,35 @@ the edit landed in week_sizedist.png while zonal90d_sizedist.png stayed stale.
   2) filmstrip      -> {TAG}_filmstrip.png   dT_rad + aerosol mass at the probe level
   3) size-dist      -> {TAG}_sizedist.png    dN/dlogDp evolution, two panels
                                              (global mean | 15S-15N), fixed axes
+  4) zonal          -> {TAG}_zonal.png       zonal-mean SO4 mass: Hovmoller at the
+                                             probe level | final lat-height section
 
   python3 plot_run.py [TAG]        # TAG defaults to zonal90d
 """
 import os
 import sys
 import glob
+import argparse
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.ticker as mticker
 import cartopy.crs as ccrs
 
-TAG = sys.argv[1] if len(sys.argv) > 1 else "zonal90d"
+# argparse rather than sys.argv[1]: --level needs a value, and a bare
+# `plot_run.py TAG` must keep working exactly as before (it does -- TAG stays a
+# single optional positional).
+_ap = argparse.ArgumentParser(description="post-run figures for one coupled run")
+_ap.add_argument("tag", nargs="?", default="zonal90d", help="OUT_TAG of the run")
+_ap.add_argument("--level", type=float, default=None, metavar="HPA",
+                 help="pressure level [hPa] for the zonal Hovmoller (FIG 4). "
+                      "Snapped to the nearest band level. Needs FRAME_LEVELS=all; "
+                      "without it only the probe level exists and this is refused "
+                      "rather than silently plotting the wrong altitude.")
+_args = _ap.parse_args()
+TAG = _args.tag
 
 # fail with the list of real tags instead of a bare FileNotFoundError on a
 # hardcoded default that may not exist any more
@@ -45,6 +60,16 @@ except Exception as _e:
     print(f"  frames file unreadable ({type(_e).__name__}: {_e})\n"
           f"  -> dashboard only; no filmstrip, no size-distribution", flush=True)
     fr = None
+
+# --level is validated HERE, not down in FIG 4 where it is used: FIG 4 is the
+# last figure, so a late check means reading a 6.5 GB frames file and drawing
+# three figures before reporting a flag that was never going to work.
+if _args.level is not None and (fr is None or "frames_zm_mas" not in fr.files):
+    sys.exit(f"--level {_args.level:g} needs FRAME_LEVELS=all output; "
+             f"coupled_frames_{TAG}.npz has probe-level frames only"
+             + (f" ({float(fr['probe_hpa']):.1f} hPa)" if fr is not None
+                and "probe_hpa" in fr.files else "") + ".\n"
+             "Re-run with FRAME_LEVELS=all, or drop --level.")
 
 RHO_AER = 1770.0                       # kg/m3 sulfate (for mass<->diameter)
 
@@ -651,6 +676,156 @@ if not _no_num:
     # leave room for BOTH the bar and its pad, or the bar is pushed off the canvas.
     fig.subplots_adjust(left=0.07, right=0.855, top=0.86, bottom=0.11, wspace=0.06)
     save(fig, "sizedist")
+
+# =====================================================================
+# FIG 4 -- zonal-mean aerosol mass
+#   -> {TAG}_zonal.png, two panels:
+#      (a) Hovmoller: zonal-mean SO4 mass MR at the probe level, day x latitude
+#      (b) zonal-mean latitude-height section of the FINAL state
+# =====================================================================
+# Panel (b) is a single time and CANNOT be otherwise from a run's own output:
+# frames_mas is a PROBE-LEVEL slab (coupling.py stores mas[:, KPROBE]), so the
+# frames carry a size axis but no vertical axis. The only full 3-D field a run
+# writes is coupled_final_*.npz. A lat-height ANIMATION needs coupling.py to
+# start saving a zonal-mean 3-D frame -- (nlev,nlat) per frame is ~1.7 MB for a
+# year, i.e. free next to the 13 GB the probe-level frames already cost.
+#
+# Both panels use a LOG norm, not the filmstrip's linear zero-anchored viridis.
+# The zonal mean spans ~2.9 decades in (a) and ~4.5 in (b), because averaging
+# over longitude removes the plume's zonal structure and leaves the equator-to-
+# pole gradient, which is the thing this figure is for. A linear scale anchored
+# on the tropical plume renders the whole poleward tail -- and the first months
+# of (a) -- as one flat floor. Linear is right for the filmstrip's single-level
+# maps, which span well under a decade; it is wrong here.
+# ---- where the zonal data comes from, in preference order ----------------
+# 1. FRAME_LEVELS=all wrote frames_zm_* : a zonal mean at EVERY level, every
+#    frame. Both panels then come from one file, panel (a) works at ANY altitude,
+#    and panel (b) is a real time series rather than a lone final state.
+# 2. Otherwise only the probe slabs exist. Panel (a) is then locked to the probe
+#    level and panel (b) can only ever be the final state from coupled_final_*.
+_ZM = FRAMES_OK and "frames_zm_mas" in fr.files
+_zon_hov = _zsec = _plev = _latz = None
+_hov_hpa = _sec_day = None
+
+if _ZM:
+    _zmass = fr["frames_zm_mas"].sum(axis=1) * 1e9       # (nzf,nlev,nlat)
+    _zh = np.asarray(fr["frames_zm_hours"], float)
+    _plev = np.asarray(fr["plev_pa"], float) / 100.0
+    _latz = np.asarray(fr["lat"], float)
+    _want = _args.level if _args.level is not None else float(fr["probe_hpa"])
+    _k = int(np.argmin(np.abs(_plev - _want)))
+    _hov_hpa = _plev[_k]
+    if _args.level is not None and abs(_hov_hpa - _want) > 0.05 * _want:
+        print(f"  note: no band level at {_want:g} hPa; using the nearest, "
+              f"{_hov_hpa:.1f} hPa", flush=True)
+    _zon_hov = _zmass[:, _k, :]                          # (nzf,nlat)
+    _hov_days = _zh / 24.0
+    _zsec = _zmass[-1]                                   # (nlev,nlat), last frame
+    _sec_day = _zh[-1] / 24.0
+else:
+    # --level was already rejected at the top of the file, where it costs
+    # nothing; reaching here with one set would mean that check drifted.
+    assert _args.level is None, "--level should have been rejected at startup"
+    if FRAMES_OK and "frames_mas" in fr.files:
+        # Reuse FIG 2's array when it built one: frames_mas is ~6.5 GB for a year
+        # and summing it a second time is pure wall clock. FIG 2 leaves `mass` a
+        # RAW mixing ratio (it scales by 1e9 at plot time), so scale here.
+        _m = globals().get("mass")
+        if _m is None:
+            _m = fr["frames_mas"].sum(axis=1)
+        _zon_hov = _m.mean(axis=2) * 1e9
+        _hov_days = fh / 24.0
+        _hov_hpa = float(fr["probe_hpa"])
+        _latz = lat_full()
+    # the 3-D final state is a SEPARATE file, and the only thing that can give a
+    # lat-height panel without zonal frames -- guard it on its own so a missing
+    # final state costs panel (b) and not the Hovmoller beside it
+    try:
+        _fin = np.load(f"coupled_final_{TAG}.npz")
+        _zsec = _fin["mas"].sum(axis=0).mean(axis=2) * 1e9
+        _plev = np.asarray(_fin["plev_pa"], float) / 100.0
+        if _latz is None:
+            _latz = np.asarray(_fin["lat"], float)
+        _sec_day = fh[-1] / 24.0 if FRAMES_OK and len(fh) else None
+    except Exception as _e:
+        print(f"  zonal section SKIPPED: coupled_final_{TAG}.npz "
+              f"({type(_e).__name__}: {_e})", flush=True)
+
+# injection geometry for the markers: stamped into every frames/final file
+_inj = {}
+for _src in (fr if FRAMES_OK else None, globals().get("_fin")):
+    if _src is not None and "inj_cfg" in _src.files:
+        _inj = dict(zip([str(k) for k in _src["inj_cfg_keys"]], _src["inj_cfg"]))
+        break
+
+
+def _lognorm(a, lo_pct=1.0, hi_pct=99.9, max_decades=4.0):
+    """Log norm clipped to a sane dynamic range.
+
+    vmin is the lo_pct percentile but never more than max_decades below vmax: on
+    a zonal mean the smallest values sit in the winter polar cap and can run
+    orders of magnitude below everything else, which would otherwise spend most
+    of the colormap on a region the figure is not about."""
+    hi = float(np.nanpercentile(a, hi_pct))
+    lo = float(np.nanpercentile(a[a > 0], lo_pct)) if np.any(a > 0) else hi / 1e4
+    return mcolors.LogNorm(vmin=max(lo, hi / 10 ** max_decades), vmax=hi)
+
+
+if _zon_hov is None and _zsec is None:
+    print("  zonal figure SKIPPED: neither frames nor final state readable", flush=True)
+else:
+    _ncol = (_zon_hov is not None) + (_zsec is not None)
+    fig = plt.figure(figsize=(6.6 * _ncol, 4.4), constrained_layout=True)
+    gs = fig.add_gridspec(1, _ncol, width_ratios=([1.5, 1] if _ncol == 2 else [1]))
+    fig.suptitle(f"Zonal-mean SO4 aerosol mass  --  {TAG}"
+                 + ("" if _ZM else "   (probe level only: FRAME_LEVELS=probe)"),
+                 fontsize=13, fontweight="bold")
+    _c = 0
+
+    if _zon_hov is not None:
+        ax = fig.add_subplot(gs[0, _c]); _c += 1
+        m = ax.pcolormesh(_hov_days, _latz, _zon_hov.T, cmap="viridis",
+                          norm=_lognorm(_zon_hov), shading="auto")
+        # the injection latitude: the plume's source, so the poleward spread in
+        # this panel reads as distance from this line
+        if _inj.get("INJ_ZONAL", 0):
+            ax.axhline(_inj.get("INJ_LAT", 0.0), color="w", lw=0.8, ls="--", alpha=0.7)
+        ax.set_xlabel("day"); ax.set_ylabel("latitude [deg]")
+        ax.set_yticks([-90, -60, -30, 0, 30, 60, 90]); ax.set_ylim(-90, 90)
+        ax.set_title(f"(a) {_hov_hpa:.1f} hPa, {_hov_days[-1]:.0f} days", fontsize=10)
+        fig.colorbar(m, ax=ax, label="SO4 [x1e-9 kg/kg]", fraction=0.035, pad=0.01)
+
+    if _zsec is not None:
+        ax = fig.add_subplot(gs[0, _c])
+        m = ax.pcolormesh(_latz, _plev, _zsec, cmap="viridis",
+                          norm=_lognorm(_zsec), shading="auto")
+        ax.set_yscale("log"); ax.invert_yaxis()
+        ax.set_yticks([1, 2, 5, 10, 20, 50, 100])
+        ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
+        ax.set_xlabel("latitude [deg]"); ax.set_ylabel("pressure [hPa]")
+        ax.set_xticks([-90, -60, -30, 0, 30, 60, 90]); ax.set_xlim(-90, 90)
+        # where panel (a) cuts through this section, so the two are read against
+        # each other rather than as two unrelated pictures
+        if _hov_hpa is not None:
+            ax.axhline(_hov_hpa, color="w", lw=0.8, ls=":", alpha=0.8)
+        if _inj:
+            ax.plot(_inj.get("INJ_LAT", 0.0), _inj.get("INJ_HPA", 55.0), marker="v",
+                    ms=7, mfc="#8f2d56", mec="w", mew=0.8, clip_on=False)
+        ax.set_title(f"(b) day {_sec_day:.0f}" if _sec_day is not None else "(b) final state"
+                     + ("   (v = injection)" if _inj else ""), fontsize=10)
+        # The outermost band levels are Dirichlet open-BC reservoirs pinned to CESM
+        # MAM4 every step (N_BC_TOP / N_BC_BOT), NOT model aerosol -- the bright
+        # band along the bottom of this panel is tropospheric MAM4 showing through
+        # the lower boundary, and reading it as plume that settled out of the band
+        # is the obvious mistake this panel invites. The count is not stored in the
+        # output, so say it generically rather than drawing a line in the wrong place.
+        ax.text(0.5, -0.30, "outermost band levels are prescribed MAM4 open-BC "
+                            "reservoirs, not model aerosol",
+                transform=ax.transAxes, ha="center", va="top", fontsize=7.5,
+                color="0.35", style="italic")
+        fig.colorbar(m, ax=ax, label="SO4 [x1e-9 kg/kg]", fraction=0.045, pad=0.01)
+
+    save(fig, "zonal")
 
 # ---- console summary ----
 print("\n=== run summary ===", flush=True)

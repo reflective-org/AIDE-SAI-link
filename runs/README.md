@@ -8,12 +8,12 @@ this tree should ever be committed.
 
 ## Launching a run
 
-`src/run_prod.sh` writes every output to the **current working directory** and
+`src/run_prod.py` writes every output to the **current working directory** and
 refuses to run from inside the source tree, so launch from a tag directory here:
 
 ```bash
 mkdir -p runs/myrun && cd runs/myrun
-N_HOURS=6 OUT_TAG=myrun INJ_SO2_TG_YR=10 ../../src/run_prod.sh
+N_HOURS=6 OUT_TAG=myrun INJ_SO2_TG_YR=10 ../../src/run_prod.py
 ```
 
 Always pair a scenario with its own `OUT_TAG`: outputs and checkpoints are keyed

@@ -45,7 +45,7 @@ disagrees with MANIFEST, MANIFEST is current. Read it before changing physics.
 ## Working on this code
 
 - **A GPU is not optional** for anything but a smoke test, and JAX will
-  *silently* fall back to CPU if it cannot load `libcuda.so.1` — `run_prod.sh`
+  *silently* fall back to CPU if it cannot load `libcuda.so.1` — `run_prod.py`
   handles that. If a step takes minutes instead of seconds, check
   `jax.devices()` first.
 - **Validate advection changes at `ADV_F32=1 ADV_CFL=0.5`**, the production
@@ -71,11 +71,11 @@ directory, so the working directory is the run:
 
 ```bash
 mkdir -p runs/prod90d && cd runs/prod90d
-OUT_TAG=prod90d ../../src/run_prod.sh
+OUT_TAG=prod90d ../../src/run_prod.py
 python3 ../../scripts/utils/plot_run.py prod90d
 ```
 
-`run_prod.sh` **refuses** to start from anywhere inside the checkout except
+`run_prod.py` **refuses** to start from anywhere inside the checkout except
 under `runs/`. That guard exists because the mistake is otherwise invisible: `.npz`/`.png` are gitignored, so a
 run launched from the wrong place looks entirely normal while filling the tree
 (this is how 29 GB accumulated before 2026-08-12). The scripts resolve their own

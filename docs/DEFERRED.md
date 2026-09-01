@@ -20,7 +20,7 @@ before and after and comparing every output array — an acceptance test that on
 means something while the executing bytes are unchanged. Bundling the import
 rewrite in would have removed exactly that check.
 
-**Also needs:** `run_prod.sh` and `driver_fast.py` would depend on the package
+**Also needs:** `run_prod.py` and `driver_fast.py` would depend on the package
 being installed in the active environment, which introduces a stale-editable-
 install failure mode. The launcher was already rewritten once to stop running
 code from a path other than the one being edited; the same care applies here.

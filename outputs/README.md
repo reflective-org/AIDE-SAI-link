@@ -10,7 +10,7 @@ The distinction from `runs/`:
 
 | | `runs/<TAG>/` | `outputs/` |
 |---|---|---|
-| written by | the model (`src/run_prod.sh`) | analysis and plotting scripts |
+| written by | the model (`src/run_prod.py`) | analysis and plotting scripts |
 | contents | `.npz` state, checkpoints, frames | figures, tables, summaries |
 | reproducible by | re-running the model (hours) | re-running a plot script (seconds) |
 

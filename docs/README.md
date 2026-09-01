@@ -24,13 +24,13 @@ CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (Lin-Rood fl
 | File | Role |
 |------|------|
 | `coupling.py`  | The model: load CESM, init from MAM4, advect+microphysics loop, save. Runnable standalone. |
-| `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../src/run_prod.sh`. |
+| `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../src/run_prod.py`. |
 | `src/advection/fct_lr.py` | Lin-Rood flux-form advection — the production transport scheme. |
 | `src/advection/fct_fast.py` | PPM/Zalesak primitives that `fct_lr` imports. |
 | `fct_core.py`  | Legacy sealed-face PPM/FCT transport (from `fct.py`). **Not on the run path** as of 2026-08-03; kept only for the bit-identical legacy check in `scripts/validation/test_conservation.py`. |
 | `settling.py`  | Gravitational settling sink. |
 | `radiation.py` | RRTMGP + Mie optics. |
-| `scripts/utils/plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
+| `scripts/utils/plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution, zonal-mean mass. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
 | `scripts/utils/gif_run.py`   | Animated versions of the filmstrip panels. |
 
 ## State (what is tracked & advected)
@@ -113,7 +113,7 @@ The model now carries the full **SO2 → H2SO4 → SO4** chain and a
   `BOUNDARY_CONDITIONS.md`.
 
 ## Run
-Production runs go through `../src/run_prod.sh` (which execs `driver_fast.py`), not
+Production runs go through `../src/run_prod.py` (which execs `driver_fast.py`), not
 these commands — see MANIFEST.md. Direct `coupling.py` invocation is the
 standalone/dev path:
 
@@ -133,7 +133,7 @@ N_DAYS=365 OUT_TAG=1yr python3 src/coupling.py
 
 > These are the **`coupling.py` module defaults** — what you get running
 > `python3 src/coupling.py` directly. They are NOT what a production run uses:
-> `run_prod.sh` overrides or hard-sets many of them (`OUT_TAG`, `DEBUG`,
+> `run_prod.py` overrides or hard-sets many of them (`OUT_TAG`, `DEBUG`,
 > `PROFILE`, `FAST_CELL_CAP`, …). For the effective production values, and for
 > the knobs this table does not list, see
 > [CONFIGURATION.md](./CONFIGURATION.md), which is authoritative.
@@ -176,14 +176,15 @@ to `--user` (needed to import `tomas_jax.solvers.diffrax`; coagulation uses the
 forward-Euler path, not diffrax itself).
 
 ## Performance
-Microphysics dominates cost (**~94%** of a 90-day run, itself ~33 h on one
-H100): it solves each cell independently (levels × 192 × 288). Two levers:
+Microphysics is the largest single stage (**~47%** of a step; a 90-day run is
+~3.5 h on one H100): it solves each cell independently (levels × 192 × 288).
+Two levers:
 - **`N_LEV`** sub-samples the vertical (cost is linear in cell count). 17 levels
   ≈ 1.4× fewer cells than the full 24-level band — and matches the intended
   PARADIS vertical grid, so the level set is directly swappable later.
 - **Multi-GPU:** microphysics is `pmap`-sharded across all *visible* GPUs
   automatically (per-cell independent), so `CUDA_VISIBLE_DEVICES` selects the
-  scale. `run_prod.sh` deliberately pins a **single** card (`GPU=0`) — on a
+  scale. `run_prod.py` deliberately pins a **single** card (`GPU=0`) — on a
   shared machine, exporting more than one is a decision to make explicitly, not
   a default to inherit.
 

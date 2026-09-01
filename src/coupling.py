@@ -504,6 +504,24 @@ STATE_CKPT = os.environ.get('STATE_CKPT', '1') != '0'
 RESUME     = os.environ.get('RESUME', '0') != '0'
 LOG_EVERY  = int(os.environ.get('LOG_EVERY', '1'))    # progress line every N steps
 FRAME_EVERY = int(os.environ.get('FRAME_EVERY', '24'))  # save size-bin snapshot every N hours
+# What the spatial frames COVER vertically. Independent of FRAME_EVERY, which
+# sets how OFTEN they are written.
+#   'probe' (default)  full lat-lon at the single PROBE_HPA level, per bin --
+#                      what the filmstrip, the so4/dTrad gifs and the size-dist
+#                      read. ~13 GB for a 366-frame year.
+#   'all'              the above PLUS a ZONAL-MEAN frame at EVERY band level,
+#                      per bin: (nf, NBINS, nlev, nlat). Unlocks a Hovmoller at
+#                      any altitude and a lat-height animation; +1.1 GB/year.
+# 'all' is a zonal MEAN and not a full 3-D history on purpose: per-bin 3-D
+# frames are (nf, NBINS, nlev, nlat, nlon) = ~155 GB for a year, 12x the probe
+# history, for a field nothing in this repo plots at full longitude resolution.
+# It ADDS to the probe slabs rather than replacing them so every existing figure
+# keeps reading exactly what it always read.
+FRAME_LEVELS = os.environ.get('FRAME_LEVELS', 'probe').lower()
+if FRAME_LEVELS not in ('probe', 'all'):
+    raise SystemExit(f"FRAME_LEVELS={FRAME_LEVELS!r} is not valid: "
+                     "use 'probe' (single PROBE_HPA level) or 'all' "
+                     "(adds a zonal-mean frame at every band level)")
 OUT_TAG    = os.environ.get('OUT_TAG', f'{N_DAYS}day')
 
 # MAM4 mode geometric standard deviations (CESM MAM4 prescribed)
@@ -1823,6 +1841,39 @@ def main():
     cumV = {'in': 0.0, 'out': 0.0}
     frames_num = []; frames_mas = []; frames_dT = []; frame_hours = []
     frames_so2 = []; frames_h2so4 = []
+    # FRAME_LEVELS='all' keeps a zonal-mean frame at every level BESIDE the probe
+    # slabs. It carries its OWN hour list rather than being index-aligned to
+    # frame_hours: a RESUME from a checkpoint written under FRAME_LEVELS=probe
+    # has no zonal history at all, so this list is legitimately shorter, and a
+    # file that says so is one a plot can read without guessing an offset.
+    frames_zm_num = []; frames_zm_mas = []; frames_zm_dT = []
+    frames_zm_so2 = []; frames_zm_h2so4 = []; frames_zm_hours = []
+
+    def _zm_capture(hr):
+        """Append one zonal-mean frame (mean over longitude) at every level."""
+        if FRAME_LEVELS != 'all':
+            return
+        # PLAIN mean over longitude. Every cell in a latitude row has the same
+        # area on this grid, so no cos(lat) weight belongs here -- that metric is
+        # a MERIDIONAL mean's, and folding it in would double-count against the
+        # wlat_full() weighting the plots already apply.
+        frames_zm_num.append(np.asarray(num.mean(axis=3)).copy())
+        frames_zm_mas.append(np.asarray(mas.mean(axis=3)).copy())
+        frames_zm_dT.append(np.asarray(dT_rad.mean(axis=2)).copy())
+        frames_zm_so2.append(np.asarray(so2.mean(axis=2)).copy())
+        frames_zm_h2so4.append(np.asarray(h2so4.mean(axis=2)).copy())
+        frames_zm_hours.append(int(hr))
+
+    def _zm_arrays():
+        """Zonal-mean arrays for a savez call; empty when none were captured."""
+        if not frames_zm_hours:
+            return {}
+        return dict(frames_zm_hours=np.array(frames_zm_hours),
+                    frames_zm_num=np.stack(frames_zm_num),
+                    frames_zm_mas=np.stack(frames_zm_mas),
+                    frames_zm_dT=np.stack(frames_zm_dT),
+                    frames_zm_so2=np.stack(frames_zm_so2),
+                    frames_zm_h2so4=np.stack(frames_zm_h2so4))
     KPROBE = int(np.argmin(np.abs(PLEV_PA / 100 - PROBE_HPA)))   # diagnostic probe level
     _res = 'per-step MAM4' if AER_SRC == 'mam4' else 'static CARMA'
     _edge = _bc_edge0
@@ -1852,7 +1903,11 @@ def main():
           + f"; y-metric {'on' if ADV_METRIC else 'OFF'}, "
           + f"dx-fix {'on' if os.environ.get('ADV_DXFIX','1') != '0' else 'OFF'}; "
           + "NO mass fixer (open system)", flush=True)
-    print(f"  probe/frames at {PLEV_PA[KPROBE]/100:.1f} hPa", flush=True)
+    print(f"  probe/frames at {PLEV_PA[KPROBE]/100:.1f} hPa"
+          + ("; FRAME_LEVELS=all -> plus a zonal-mean frame at all "
+             f"{nlev} levels ({PLEV_PA[0]/100:.1f}-{PLEV_PA[-1]/100:.1f} hPa)"
+             if FRAME_LEVELS == 'all' else
+             "; FRAME_LEVELS=probe (this level only)"), flush=True)
 
     # capture the true initial state as frame 0
     frames_num.append(np.asarray(num[:, KPROBE]).copy())
@@ -1861,6 +1916,7 @@ def main():
     frames_so2.append(np.asarray(so2[KPROBE]).copy())
     frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
     frame_hours.append(0)
+    _zm_capture(0)
 
     N_STEPS = N_HOURS // STEP_HOURS
     FRAME_EVERY_STEPS = max(1, round(FRAME_EVERY / STEP_HOURS))
@@ -1975,6 +2031,23 @@ def main():
             frames_dT = [a.copy() for a in _fk['frames_dT']]
             frames_so2 = [a.copy() for a in _fk['frames_so2']]
             frames_h2so4 = [a.copy() for a in _fk['frames_h2so4']]
+            # Zonal history is OPTIONAL on the way in: a checkpoint written
+            # before FRAME_LEVELS existed, or under FRAME_LEVELS=probe, simply
+            # has none. Starting it empty is correct rather than an error --
+            # frames_zm_hours records where it really begins, so the gap is
+            # visible in the file instead of being silently mis-aligned.
+            if 'frames_zm_hours' in _fk.files:
+                frames_zm_hours = [int(h) for h in _fk['frames_zm_hours']]
+                frames_zm_num = [a.copy() for a in _fk['frames_zm_num']]
+                frames_zm_mas = [a.copy() for a in _fk['frames_zm_mas']]
+                frames_zm_dT = [a.copy() for a in _fk['frames_zm_dT']]
+                frames_zm_so2 = [a.copy() for a in _fk['frames_zm_so2']]
+                frames_zm_h2so4 = [a.copy() for a in _fk['frames_zm_h2so4']]
+            elif FRAME_LEVELS == 'all':
+                print("  NOTE: FRAME_LEVELS=all but the frames ckpt has no zonal "
+                      "history (written under FRAME_LEVELS=probe).\n"
+                      "    The zonal frames will start at this resume point; the "
+                      "probe-level history is unaffected.", flush=True)
         except Exception as _e:
             print(f"  WARNING: frames ckpt {_ff} is unreadable "
                   f"({type(_e).__name__}: {_e}).\n"
@@ -1989,6 +2062,8 @@ def main():
             frame_hours = []
             frames_num = []; frames_mas = []; frames_dT = []
             frames_so2 = []; frames_h2so4 = []
+            frames_zm_num = []; frames_zm_mas = []; frames_zm_dT = []
+            frames_zm_so2 = []; frames_zm_h2so4 = []; frames_zm_hours = []
         # The timeseries ckpt gets the same treatment as the frames one above, and
         # for the same reason: it is a DIAGNOSTIC record, not the physics. Every
         # cumulative counter the run needs to continue correctly (cumB/cumV, the
@@ -2047,6 +2122,18 @@ def main():
             frames_h2so4 = frames_h2so4[:_keep]
             print(f"  NOTE: frames ckpt ran {_ndrop_fr} frame(s) past the state "
                   f"(h>{_h_state}); trimmed to stay consistent.", flush=True)
+        # the zonal history is trimmed against ITS OWN hours, not against _keep:
+        # it can be shorter than frame_hours (see the resume note above), so
+        # reusing the probe-slab count here would cut the wrong number of frames
+        _ndrop_zm = sum(1 for h in frames_zm_hours if h > _h_state)
+        if _ndrop_zm:
+            _kz = len(frames_zm_hours) - _ndrop_zm
+            frames_zm_hours = frames_zm_hours[:_kz]
+            frames_zm_num = frames_zm_num[:_kz]; frames_zm_mas = frames_zm_mas[:_kz]
+            frames_zm_dT = frames_zm_dT[:_kz]; frames_zm_so2 = frames_zm_so2[:_kz]
+            frames_zm_h2so4 = frames_zm_h2so4[:_kz]
+            print(f"  NOTE: zonal frames ran {_ndrop_zm} frame(s) past the state; "
+                  f"trimmed.", flush=True)
 
         # ---- frames history BEHIND the state (a hole, not an overrun) --------
         # The trim above fixes frames that are too NEW. The opposite case is not a
@@ -2638,6 +2725,7 @@ def main():
             frames_so2.append(np.asarray(so2[KPROBE]).copy())
             frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
             frame_hours.append(it1)
+            _zm_capture(it1)
             # incremental checkpoint: frames/timeseries are otherwise only
             # written once at the very end, so a killed/crashed multi-hour run
             # loses everything. Overwrite a single _ckpt file each frame (cheap:
@@ -2650,7 +2738,11 @@ def main():
                      frames_dT=np.stack(frames_dT),
                      frames_so2=np.stack(frames_so2),
                      frames_h2so4=np.stack(frames_h2so4),
-                     probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP)
+                     probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
+                     # the vertical/horizontal axes, so a zonal frame is
+                     # plottable from this file alone rather than needing the
+                     # final state beside it
+                     plev_pa=PLEV_PA, lat=lat, **_zm_arrays())
             savez_atomic(f'coupled_timeseries_{OUT_TAG}_ckpt.npz', N0=N0, M0=M0,
                      inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
                      phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
@@ -2713,7 +2805,8 @@ def main():
              frames_dT=np.stack(frames_dT),
              frames_so2=np.stack(frames_so2),
              frames_h2so4=np.stack(frames_h2so4),
-             probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP)
+             probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
+             plev_pa=PLEV_PA, lat=lat, **_zm_arrays())
     print(f"saved coupled_final/timeseries/frames_{OUT_TAG}.npz "
           f"({len(frame_hours)} frames)", flush=True)
 

@@ -1,7 +1,10 @@
 # Configuration reference
 
-Every knob in this model is an environment variable. This page is the complete
-list; [`../README.md`](../README.md) carries the five you need for a first run.
+Every knob in this model is an environment variable, and since 2026-09-01 every
+one of them also has a `run_prod.py --flag`. This page is the complete list;
+[`../README.md`](../README.md) carries the five you need for a first run, and
+`python3 src/run_prod.py --help` is the live inventory — generated from the same
+table the launcher resolves, so it cannot drift from the code.
 
 > **[`../MANIFEST.md`](../MANIFEST.md) is canonical for this tree.** It records
 > every default *and why it is what it is*. This page tells you what the knobs
@@ -13,22 +16,33 @@ any log is self-describing. Set them by prefixing the launcher:
 ```bash
 REPO=$PWD/AIDE-SAI-link                    # wherever this clone lives -- must be ABSOLUTE, the next line cd's away
 cd "$PWD/sai_runs"                         # launch from a runs dir, NOT the repo
-OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/src/run_prod.sh
+OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/src/run_prod.py
 ```
 
-Anything not listed in `run_prod.sh`'s own prefix block simply passes through
-from your environment — `AER_SRC=carma $REPO/src/run_prod.sh` works. The exception:
+or by passing the equivalent flag, which is usually easier to read:
 
-> [!IMPORTANT]
-> `run_prod.sh` **hard-sets** `INIT_BIN=so4`, `STATE_CKPT=1`, `FRAME_EVERY=24`,
-> `FAST_CELL_CAP=50000`, `ADV_VPOS=1`, `DEBUG=1`, `PROFILE=1`. Passing those on
-> the command line is silently ignored. Override them by editing the script, or
-> run `driver_fast.py` directly. The remaining launcher variables —
-> `N_HOURS`, `OUT_TAG`, `RESUME`, all `INJ_*`, `FAST_SORT`, `GPU`,
-> `CUDA_DRIVER_LIB`, `XLA_PYTHON_CLIENT_PREALLOCATE` — are overridable.
+```bash
+python3 $REPO/src/run_prod.py --out-tag inj20_30N --inj-so2 20 --inj-lat 30 --inj-mirror 1
+```
+
+Anything the launcher does not preset passes through from your environment —
+`AER_SRC=carma $REPO/src/run_prod.py` works, and so does `--aer-src carma`.
+
+**Precedence, highest first:** `--flag` > an already-set environment variable >
+`run_prod.py`'s production preset > `coupling.py`'s own default. `--dry-run`
+prints the fully resolved environment, with the source of each value, and exits
+without launching.
+
+> [!NOTE]
+> Until 2026-09-01 the shell launcher **hard-set** `INIT_BIN`, `STATE_CKPT`,
+> `FRAME_EVERY`, `FAST_CELL_CAP`, `ADV_VPOS`, `DEBUG` and `PROFILE` as bare
+> literals, so passing them was accepted by the shell and then *silently
+> discarded* — the same failure that had already bitten `N_HOURS`, `FAST_SORT`
+> and `INJ_ZONAL` one at a time. All of them are overridable now: presets and
+> pass-throughs go through one table, so that class of bug cannot recur.
 
 The **Default** column below is the *effective* production default, i.e. what
-you get from `run_prod.sh`; where the bare `coupling.py` module default differs
+you get from `run_prod.py`; where the bare `coupling.py` module default differs
 it is noted.
 
 ## Which flags actually apply to my run?
@@ -36,7 +50,7 @@ it is noted.
 Most of this page is inert for any given run. Two things decide which part is
 live: **which entry point you launched** and **which options you switched on**.
 
-`run_prod.sh` execs `driver_fast.py`, which imports `coupling.py` and then
+`run_prod.py` execs `driver_fast.py`, which imports `coupling.py` and then
 *replaces* its microphysics with the batched `tomas_jax.fast` engine. So the
 per-cell chain's own microphysics knobs are never reached on the production
 path — the `FAST_*` ones take their place. Everything else (injection, run
@@ -45,7 +59,7 @@ paths run the same code for it.
 
 | you launched | microphysics knobs that are live | the ones that do nothing |
 |---|---|---|
-| `run_prod.sh` or `python3 src/driver_fast.py` — **the normal case** | `ALPHA_COND`, `FAST_DT`, `FAST_CELL_CAP`, `FAST_SORT`, `FAST_FN_SCALE`, `FAST_COAG_SUB_CAP`, `FAST_COND_SUB_CAP`, `FAST_COAG_CMAX` | `MICRO_SUBSTEPS`, `N_COAG_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, all `NUC_*` |
+| `run_prod.py` or `python3 src/driver_fast.py` — **the normal case** | `ALPHA_COND`, `FAST_DT`, `FAST_CELL_CAP`, `FAST_SORT`, `FAST_FN_SCALE`, `FAST_COAG_SUB_CAP`, `FAST_COND_SUB_CAP`, `FAST_COAG_CMAX` | `MICRO_SUBSTEPS`, `N_COAG_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, all `NUC_*` |
 | `python3 src/coupling.py` — standalone/dev only | `MICRO_SUBSTEPS`, `COAG_MAX_SUBSTEPS`, `CELL_CHUNK`, `ALPHA_COND`, `NUC_ORG`, `NUC_NH3`, `NUC_FION`, `NUC_FN_MAX` | every `FAST_*` |
 
 The two engines also differ *physically*, not just in speed: the fast engine's
@@ -53,7 +67,7 @@ nucleation is **binary** (H2SO4–H2O only), which is why it has no `NUC_ORG` /
 `NUC_NH3` / `NUC_FION` to set — `FAST_FN_SCALE` is its only nucleation dial.
 
 Rows below marked **[chain]** are read only by the standalone `coupling.py`
-path and are ignored under `run_prod.sh`.
+path and are ignored under `run_prod.py`.
 
 Beyond the entry point, four switches gate whole blocks of knobs:
 
@@ -92,6 +106,7 @@ line, they are not read back.
 | `RESUME` | `0` | `1` = continue from `coupled_state_<TAG>_ckpt.npz` |
 | `STATE_CKPT` | `1` | write the restart checkpoint (~400 MB, atomic, overwritten in place) |
 | `FRAME_EVERY` | `24` | hours between frame + checkpoint writes |
+| `FRAME_LEVELS` | `probe` | what a frame COVERS vertically. `probe` = full lat-lon at `PROBE_HPA` only. `all` adds a zonal-mean frame at **every** band level (+1.1 GB/yr) and is what the lat-height figures and `*_zonal_*.gif` need |
 | `LOG_EVERY` | `1` | progress line every N coupling steps (N x `STEP_HOURS` hours) |
 | `PROBE_HPA` | `50` | level [hPa] used for frames and probe diagnostics |
 | `DIAG_CORE_HPA` | *(unset)* | `lo,hi` diagnostic core window; unset = symmetric −1 level per end (1.6–121.5 hPa) |
@@ -157,7 +172,7 @@ More detail: [BOUNDARY_CONDITIONS.md](./BOUNDARY_CONDITIONS.md).
 
 ## Microphysics and settling
 
-Under `run_prod.sh` only `MICRO`, `ALPHA_COND`, `SETTLE` and `WET_SETTLING` are
+Under `run_prod.py` only `MICRO`, `ALPHA_COND`, `SETTLE` and `WET_SETTLING` are
 live here; the **[chain]** rows are the standalone `coupling.py` engine's and
 are ignored. Their fast-engine counterparts are in the next section.
 
@@ -178,7 +193,7 @@ are ignored. Their fast-engine counterparts are in the next section.
 
 ## Fast microphysics engine (`driver_fast.py`) — the production microphysics
 
-**This is the section that applies to any run started with `run_prod.sh`.**
+**This is the section that applies to any run started with `run_prod.py`.**
 Apart from `FAST_FN_SCALE`, these are memory/scheduling knobs: micro is per-cell
 independent, so how cells are grouped into chunks cannot change results.
 
@@ -213,7 +228,7 @@ independent, so how cells are grouped into chunks cannot change results.
 | `CO2_PPM` | `380.0` | background CO2 (~2005, for 1996–2014 forcing) |
 | `N2O_PPB` | `319.0` | background N2O |
 
-## GPU and process environment (`run_prod.sh`)
+## GPU and process environment (`run_prod.py`)
 
 | variable | default | meaning |
 |---|---|---|
@@ -234,3 +249,168 @@ independent, so how cells are grouped into chunks cannot change results.
 `WET_SETTLING` / `WET_OPTICS` / `SETTLE` / `ADV_VPOS` only **warn** — the state is
 still valid, the model integrating it forward just changes at the seam. Both
 arrays are append-only, so adding a field never locks out an older checkpoint.
+
+## Flag ↔ environment variable cross-reference
+
+Generated from the `KNOBS` table in `src/run_prod.py` — the same table
+the launcher resolves and `--help` prints, so this cannot drift from the
+code. **prod** is `run_prod.py`'s production preset; blank means the
+launcher sets nothing and `coupling.py`'s own default stands.
+
+### run control
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--n-hours` | `N_HOURS` | `2160` | run length in hours (2160 = 90 d; 8760 = 1 yr) |
+| `--n-days` | `N_DAYS` | — | run length in days (N_HOURS wins if both given) |
+| `--out-tag` | `OUT_TAG` | `prod90d` | output tag; ALL outputs and checkpoints are keyed by it |
+| `--resume` | `RESUME` | `0` | resume from coupled_state_<TAG>_ckpt.npz |
+| `--h0` | `H0` | — | start hour index into the CESM h1 series (0 = 1996-01-01 00Z) |
+| `--step-hours` | `STEP_HOURS` | — | coupling step [h]; one advect+coag per step (default 6) |
+| `--state-ckpt` | `STATE_CKPT` | `1` | write the 3-D restart checkpoint (needed for --resume) |
+| `--frame-every` | `FRAME_EVERY` | `24` | spatial frame every N hours (>= N_HOURS = final frame only) |
+| `--frame-levels` | `FRAME_LEVELS` | — | 'probe' (default) = one PROBE_HPA level; 'all' adds a zonal-mean frame at every level (+1.1 GB/yr) and unlocks the lat-height figures and gifs |
+| `--log-every` | `LOG_EVERY` | — | progress line every N coupling steps |
+| `--probe-hpa` | `PROBE_HPA` | — | diagnostic/frame level (default 50) |
+| `--debug` | `DEBUG` | `1` | verbose per-step diagnostics |
+| `--profile` | `PROFILE` | `1` | per-stage timing lines |
+
+### domain and grid
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--p-lo-hpa` | `P_LO_HPA` | — | top of the band (default 1) |
+| `--p-hi-hpa` | `P_HI_HPA` | — | bottom of the band (default 100) |
+| `--n-lev` | `N_LEV` | — | sub-sample the band to ~N levels (0 = full contiguous band) |
+| `--n-bins` | `N_BINS` | — | TOMAS bin count (0 = native 40) |
+| `--diag-core-hpa` | `DIAG_CORE_HPA` | — | core window for the 'int' burden diagnostics |
+
+### injection scenario (the knobs meant to change run to run)
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--inj-so2` | `INJ_SO2_TG_YR` | `0.0` | SO2 injection rate. DEFAULT 0 = no-injection control |
+| `--inj-h2so4` | `INJ_H2SO4_TG_YR` | `0.0` | direct H2SO4(g) injection rate |
+| `--inj-hpa` | `INJ_HPA` | `55.0` | injection altitude (snapped to the nearest model level) |
+| `--inj-lat` | `INJ_LAT` | `0.0` | injection latitude (snapped to the nearest row) |
+| `--inj-lon` | `INJ_LON` | `180.0` | injection longitude (ignored when --inj-zonal 1) |
+| `--inj-zonal` | `INJ_ZONAL` | `1` | 1 = spread around the whole latitude ring, 0 = single cell |
+| `--inj-mirror` | `INJ_MIRROR` | `0` | release at BOTH +lat and -lat, total split 50/50 (not doubled) |
+
+### aerosol source / initial condition
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--aer-src` | `AER_SRC` | — | IC/BC reservoir source (default mam4) |
+| `--init-bin` | `INIT_BIN` | `so4` | how MAM4 modes are binned onto TOMAS |
+| `--init-sigma` | `INIT_SIGMA` | — | override the log-normal mode width used for binning |
+| `--carma-file` | `CARMA_FILE` | — | CARMA reservoir file (AER_SRC=carma) |
+| `--carma-frame` | `CARMA_FRAME` | — | time index into the CARMA file |
+| `--carma-rho` | `CARMA_RHO` | — | CARMA particle density |
+| `--carma-subbin` | `CARMA_SUBBIN` | — | CARMA sub-binning factor |
+
+### boundaries
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--n-bc-top` | `N_BC_TOP` | — | band levels pinned/served at the top face (default 1) |
+| `--n-bc-bot` | `N_BC_BOT` | — | band levels pinned/served at the bottom face (default 1) |
+| `--bc-edge` | `BC_EDGE` | — | aerosol edge treatment (derived from ADV_WCONT) |
+| `--bc-gas` | `BC_GAS` | — | gas edge treatment (derived from BC_EDGE) |
+| `--bc-bot-aer` | `BC_BOT_AER` | — | scale the bottom-face aerosol inflow (0 = clean upwelling) |
+
+### physics stages
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--micro` | `MICRO` | — | microphysics mode; 'off' is transport-only |
+| `--micro-substeps` | `MICRO_SUBSTEPS` | — | micro substeps per coupling step (default 6) |
+| `--settle` | `SETTLE` | — | gravitational settling (default on) |
+| `--wet-settling` | `WET_SETTLING` | — | hygroscopic growth in the settling velocity |
+| `--wet-optics` | `WET_OPTICS` | — | hygroscopic growth in the optics |
+| `--rad` | `RAD` | — | radiation on/off |
+| `--rad-every` | `RAD_EVERY` | — | coupling steps between radiation calls |
+| `--rad-mode` | `RAD_MODE` | — | heating-rate definition |
+| `--arf-avg-h` | `ARF_AVG_H` | — | trailing window for the reported TOA forcing |
+| `--alpha-cond` | `ALPHA_COND` | — | H2SO4 accommodation coefficient |
+
+### chemistry, nucleation and coagulation
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--oh-sza` | `OH_SZA` | — | diurnal OH parabola in cos(SZA) |
+| `--oh-peak` | `OH_PEAK` | — | noon OH peak (default 2.3e6) |
+| `--oh-substeps` | `OH_SUBSTEPS` | — | OH samples per coupling step |
+| `--nuc-org` | `NUC_ORG` | — | organic concentration for Riccobono nucleation |
+| `--nuc-nh3` | `NUC_NH3` | — | ammonia concentration |
+| `--nuc-fion` | `NUC_FION` | — | ion-induced nucleation factor |
+| `--nuc-fn-max` | `NUC_FN_MAX` | — | cap on the total nucleation rate |
+| `--n-coag-substeps` | `N_COAG_SUBSTEPS` | — | forward-Euler coag substeps (legacy MICRO=coag path) |
+| `--coag-max-substeps` | `COAG_MAX_SUBSTEPS` | — | ceiling on the adaptive coag substeps (speed-critical) |
+
+### fast microphysics engine
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--fast-dt` | `FAST_DT` | — | inner timestep of run_fast (default 360) |
+| `--fast-cell-cap` | `FAST_CELL_CAP` | `50000` | cells per run_fast chunk; smaller is often FASTER |
+| `--fast-sort` | `FAST_SORT` | `1` | stiffness sort (~27% of micro; one ~8 GB alloc -- first to disable on a loaded card) |
+| `--fast-fn-scale` | `FAST_FN_SCALE` | — | nucleation-rate scale factor |
+| `--fast-coag-sub-cap` | `FAST_COAG_SUB_CAP` | — | coag substep cap inside run_fast |
+| `--fast-cond-sub-cap` | `FAST_COND_SUB_CAP` | — | condensation substep cap inside run_fast |
+| `--fast-coag-cmax` | `FAST_COAG_CMAX` | — | coag Courant-like limit inside run_fast |
+
+### advection
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--adv-scheme` | `ADV_SCHEME` | — | transport form (default lr = Lin-Rood flux form) |
+| `--adv-cfl` | `ADV_CFL` | — | horizontal CFL target (production 0.5) |
+| `--adv-f32` | `ADV_F32` | — | float32 transport sweeps (production 1) |
+| `--adv-vpos` | `ADV_VPOS` | `1` | VERTICAL POSITIVITY LIMITER -- see the header; do not turn off |
+| `--adv-wcont` | `ADV_WCONT` | — | rederive omega from discrete continuity (opens the faces) |
+| `--adv-metric` | `ADV_METRIC` | — | cos(phi) area metric in the y-sweep |
+| `--adv-dxfix` | `ADV_DXFIX` | — | true grid spacing in the x-sweep |
+| `--adv-polar` | `ADV_POLAR` | — | polar cap treatment (zonal = stirred, mass-conserving) |
+
+### radiation gases and chunking
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--co2-ppm` | `CO2_PPM` | — | background CO2 for RRTMGP |
+| `--n2o-ppb` | `N2O_PPB` | — | background N2O for RRTMGP |
+| `--rad-lat-chunk` | `RAD_LAT_CHUNK` | — | latitude rows per radiation chunk (GPU memory) |
+
+### memory / performance (cannot change results)
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--cell-chunk` | `CELL_CHUNK` | — | cells per microphysics vmap batch |
+| `--tracer-chunk` | `TRACER_CHUNK` | — | tracers per advection batch (0 = all 82 at once) |
+
+### input data locations
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--cesm-dir` | `CESM_DIR` | — | root of the CESM h1 tseries archive |
+| `--cesm-prefix` | `CESM_PREFIX` | — | CESM case-name prefix of the h1 files |
+| `--cesm-suf` | `CESM_SUF` | — | date-range suffix of the h1 files |
+| `--tomas-jax-path` | `TOMAS_JAX_PATH` | — | tomas-jax checkout (default models/tomas-jax) |
+| `--rrtmgp-path` | `RRTMGP_PATH` | — | jax-rrtmgp checkout (default models/jax-rrtmgp) |
+
+### debug dumps
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--dump-premicro` | `DUMP_PREMICRO` | — | dump the pre-microphysics state to this file |
+| `--dump-premicro-step` | `DUMP_PREMICRO_STEP` | — | step at which to take that dump |
+
+### launcher-only
+
+| flag | variable | default | meaning |
+|---|---|---|---|
+| `--gpu` | `GPU` → `CUDA_VISIBLE_DEVICES` | `0` | card to pin the run to |
+| `--cuda-driver-lib` | `CUDA_DRIVER_LIB` | *(auto-search)* | directory holding `libcuda.so.1`; empty string disables the search |
+| `--preallocate` | `XLA_PYTHON_CLIENT_PREALLOCATE` | `false` | grow GPU memory on demand |
+| `--dry-run` | — | — | print the resolved environment and exit |
+| `--allow-source-tree` | — | — | override the refusal to write into the checkout |

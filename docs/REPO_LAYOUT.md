@@ -11,7 +11,7 @@ AIDE-SAI-link/
     _paths.py        import-path setup; also defines REPO_ROOT and MODELS
     coupling.py      the orchestrator: forcing, IC/BC, budget, main()
     driver_fast.py   production entry point (swaps in the fast engines)
-    run_prod.sh      the launcher
+    run_prod.py      the launcher
     advection/       fct_lr.py (production), fct_fast.py, fct_core.py (legacy)
     radiation/       radiation.py -- Mie + RRTMGP -> heating, AOD, ARF
     settling/        settling.py -- closed-form gravitational settling
