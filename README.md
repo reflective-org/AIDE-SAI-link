@@ -48,7 +48,9 @@ CESM h1 hourly ──► U, V, OMEGA ──────► transport (Lin-Rood f
 - **State**: 40 TOMAS bins × (number, dry SO4 mass) + 2 gas tracers = 82
   advected 3-D fields, on the native CESM f09 grid (192 × 288) over a
   1–150 hPa band (24 levels), 6 h coupling step.
-- **Scale**: a 90-day run is ~33 h on one H100; microphysics is ~94% of it.
+- **Scale**: a 90-day run is ~3.5 h on one H100 (34.9 s/step, measured over a
+  full year 2026-08-28); microphysics is ~47% of a step, radiation ~27%,
+  advection ~21%. Per-step cost is flat over a year.
 
 ## Scope, and where this is going
 
@@ -146,7 +148,7 @@ with nothing in between — checks 2 and 3 are silent unless they raise
 `ImportError`.
 
 The `export` is only needed to make check 4 pass in a bare shell: this box keeps
-`libcuda.so.1` outside the default search path, and `run_prod.sh` prepends the
+`libcuda.so.1` outside the default search path, and `run_prod.py` prepends the
 same directory itself (see `CUDA_DRIVER_LIB` below). Adjust the path, or drop
 the line, on a normal CUDA install. Without it jax prints a `cuInit` error and
 reports `[CpuDevice(id=0)]` — harmless here, and *not* a failed check, but
@@ -165,7 +167,7 @@ a 2-day test, ~160 GB for a 90-day run. Full variable list and units:
 **On the shared H100 box these runs were made on, set none of this.** The three
 defaults in `coupling.py` already resolve to the FWHIST archive under `/data`,
 which is readable by every account on the machine, so the install above is the
-whole setup and `run_prod.sh` works as written. `CESM_DIR`/`CESM_PREFIX`/
+whole setup and `run_prod.py` works as written. `CESM_DIR`/`CESM_PREFIX`/
 `CESM_SUF` matter only off that box. The one place any CESM path is built is
 `coupling.py` (`H1`); `radiation.py` is handed the opener rather than
 constructing paths of its own, so there is nothing else to repoint.
@@ -179,7 +181,7 @@ own Mie tables. The four flux fields above are surface boundary conditions only
 
 **Run from a directory that is not the repo.** Every output path is relative to
 the working directory, so that directory is where the run lands — and a single
-90-day run writes GBs of `.npz`. `run_prod.sh` refuses to start with the repo
+90-day run writes GBs of `.npz`. `run_prod.py` refuses to start with the repo
 itself as the working directory rather than let that happen silently.
 
 ```bash
@@ -188,18 +190,25 @@ RUNS=$PWD/sai_runs                 # anywhere BUT the repo
 mkdir -p "$RUNS" && cd "$RUNS"
 
 # 1-step smoke test: N_HOURS=6 is one 6 h coupling step, ~6 min on an H100.
-N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/src/run_prod.sh
-python3 $REPO/scripts/utils/plot_run.py smoke               # -> smoke_{dashboard,filmstrip,sizedist}.png
+N_HOURS=6 OUT_TAG=smoke INJ_SO2_TG_YR=10 $REPO/src/run_prod.py
+python3 $REPO/scripts/utils/plot_run.py smoke               # -> smoke_{dashboard,filmstrip,sizedist,zonal}.png
 
 # the production scenario: 10 Tg SO2/yr equatorial ring, 90 days.
-# N_HOURS=2160 (2160 h / 6 h = 360 steps = 90 days) is run_prod.sh's default,
+# N_HOURS=2160 (2160 h / 6 h = 360 steps = 90 days) is run_prod.py's default,
 # so it is written out here only to make the run length explicit.
-N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh          # ~33-36 h on one H100
-RESUME=1 N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh # continue after a kill
+N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.py          # ~3.5 h on one H100
+RESUME=1 N_HOURS=2160 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.py # continue after a kill
 python3 $REPO/scripts/utils/plot_run.py prod90d
 
-# a full year is the same launcher with a longer clock (8760 h = 365 days, ~140 h)
-RESUME=1 N_HOURS=8760 INJ_SO2_TG_YR=10 OUT_TAG=prod1yr $REPO/src/run_prod.sh
+# a full year is the same launcher with a longer clock (8760 h = 365 days, ~16 h)
+RESUME=1 N_HOURS=8760 INJ_SO2_TG_YR=10 OUT_TAG=prod1yr $REPO/src/run_prod.py
+
+# TRANSPORT-ONLY timing run: stages 2, 2b and 5 off, no injection, so only
+# advection and the boundary/polar stages are live. 48 h = 8 steps, ~100 s.
+# FRAME_EVERY is set to the run LENGTH, not 0 -- FRAME_EVERY_STEPS is
+# max(1, FRAME_EVERY/STEP_HOURS), so 0 would mean a frame EVERY step.
+MICRO=off RAD=0 SETTLE=0 STATE_CKPT=0 FRAME_EVERY=48 N_HOURS=48 \
+  OUT_TAG=speed-benchmark $REPO/src/run_prod.py
 ```
 
 Run length is set **in hours**, always: `N_HOURS` counts forcing hours from
@@ -209,9 +218,32 @@ production run. `N_DAYS` exists only as the fallback that supplies `N_HOURS`
 when it is unset (`N_HOURS = 24 × N_DAYS`, default 2 days) — for anything
 scripted, set `N_HOURS`.
 
-`run_prod.sh` sets the whole production environment (GPU pin, `libcuda` path,
+**What one step does.** Every coupling step walks the same stage list, in order:
+
+| # | Stage | Off when |
+|---|---|---|
+| 0 | SAI source — SO2 into the injection cells | `INJ_SO2_TG_YR=0` |
+| 1 | Transport — all 82 tracers on shared winds | — |
+| 2 | Microphysics — chemistry, nucleation, coagulation, condensation | `MICRO=off` |
+| 2b | Settling — the one true aerosol sink | `SETTLE=0` |
+| 3, 4, 4a | Vertical BC, polar caps, open-face reservoir refresh | — |
+| 5 | Radiation — evolved bins → heating → prognostic `dT` | `RAD=0` |
+
+Stages 4 and 5 write state consumed by the **next** step (the frozen advection
+target, and the `dT` the next microphysics sees), so the polar caps and the
+aerosol → radiation → temperature loop close across the step boundary rather
+than within it. `docs/PROCESSES.md` §0 has the full ordering rationale, the
+three nested meanings of "step" (coupling step / advection substep / micro inner
+step), and how to read a `PROFILE=1` breakdown.
+
+Switching stages off is how a run is narrowed to one process — `MICRO=off
+RAD=0 SETTLE=0` with no injection leaves transport, which is the timing run in
+the block above. `MICRO=off` is a benchmark/diagnostic mode, not a physics
+configuration: the aerosol moves but never evolves.
+
+`run_prod.py` sets the whole production environment (GPU pin, `libcuda` path,
 memory policy) and execs `driver_fast.py` from its own tree — so it always runs
-the code you just edited, wherever you launched it from. **A bare `run_prod.sh`
+the code you just edited, wherever you launched it from. **A bare `run_prod.py`
 is a no-injection control** — `INJ_SO2_TG_YR` defaults to 0 so a forgotten flag
 gives an obviously unforced baseline rather than a silent SAI result. Always
 pair a scenario with its own `OUT_TAG`; outputs and checkpoints are keyed by it,
@@ -227,7 +259,7 @@ Each run writes, into the launch directory:
 | `coupled_timeseries_<TAG>.npz` | per-step scalar diagnostics (burdens, AOD550, ARF) |
 | `coupled_state_<TAG>_ckpt.npz` | restart checkpoint (+ `_frames_`/`_timeseries_` twins) |
 
-Then `python3 scripts/utils/plot_run.py <TAG>` writes the three figures and
+Then `python3 scripts/utils/plot_run.py <TAG>` writes the four figures and
 `python3 scripts/utils/gif_run.py <TAG> [--fps 8] [--width 900]` animates the filmstrip
 panels. Both read `coupled_*_<TAG>.npz` from the **current working directory**.
 
@@ -238,13 +270,13 @@ in the run header, so any log is self-describing. Set them by prefixing the
 launcher:
 
 ```bash
-OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/src/run_prod.sh
+OUT_TAG=inj20_30N INJ_SO2_TG_YR=20 INJ_LAT=30 INJ_MIRROR=1 $REPO/src/run_prod.py
 ```
 
 **The complete reference is [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** —
 every variable, its production default, and which ones your run actually reads
 (that last part matters: most knobs are inert for any given run, since
-`run_prod.sh` swaps in the fast microphysics engine and the per-cell chain's
+`run_prod.py` swaps in the fast microphysics engine and the per-cell chain's
 knobs are then never reached).
 
 For a first run you need at most five variables. The rest have production
@@ -252,7 +284,7 @@ defaults for a reason — change them only with `MANIFEST.md` open.
 
 | you want to | set |
 |---|---|
-| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 $REPO/src/run_prod.sh` |
+| run the standard scenario | `OUT_TAG=<name> INJ_SO2_TG_YR=10 N_HOURS=2160 $REPO/src/run_prod.py` |
 | run its control | the same, minus `INJ_SO2_TG_YR` (it defaults to 0) |
 | continue after a kill or crash | add `RESUME=1`, and **repeat the same `INJ_*` and `OUT_TAG`** |
 | move the injection | `INJ_HPA`, `INJ_LAT` (+ `INJ_MIRROR=1` for a two-hemisphere ring) |
@@ -260,7 +292,7 @@ defaults for a reason — change them only with `MANIFEST.md` open.
 | do a cheap dynamics-only test | `RAD=0` (drops the `jax-rrtmgp` dependency too) |
 
 > [!IMPORTANT]
-> `run_prod.sh` **hard-sets** seven variables (`INIT_BIN`, `STATE_CKPT`,
+> `run_prod.py` **hard-sets** seven variables (`INIT_BIN`, `STATE_CKPT`,
 > `FRAME_EVERY`, `FAST_CELL_CAP`, `ADV_VPOS`, `DEBUG`, `PROFILE`). Passing those
 > on the command line is *silently ignored* — see
 > [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) for how to override them.

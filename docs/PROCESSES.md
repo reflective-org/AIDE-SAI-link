@@ -13,6 +13,83 @@ header names the active driver; check it before reasoning about any of them.
 
 ---
 
+# 0. One coupling step
+
+Everything runs on the `STEP_HOURS` cadence (6 h). A run of `N_HOURS` is
+`N_HOURS / STEP_HOURS` **coupling steps**, and each step walks the stage list
+below once, in this order. The ordering is not incidental — several stages are
+placed where they are for a stated reason, noted in the code at each one.
+
+| # | Stage | Off when | Timed as |
+|---|---|---|---|
+| 0 | SAI source — continuous SO2 (and optional H2SO4) into the injection cells | `INJ_SO2_TG_YR=0` | — |
+| 1 | **Transport** — all 82 tracers advected on shared winds | — | `advect` |
+| 2 | **Microphysics** — SO2 chemistry, nucleation, coagulation, condensation | `MICRO=off` | `micro` |
+| 2b | **Settling** — implicit upwind column sweep, the one true aerosol sink | `SETTLE=0` | `settle` |
+| 3 | Vertical BC — refill the edge slabs from the MAM4 reservoir | — | `bc+polar` |
+| 4 | Polar-cap refresh — freeze the target for the *next* step's advection | — | `bc+polar` |
+| 4a | Reservoir refresh for the open vertical faces | — | `bc+polar` |
+| 5 | **Radiation** — evolved bins → heating → prognostic `dT` | `RAD=0` | `radiation` |
+
+Reading the ordering:
+
+* **Stage 0 before transport**, so a fresh pulse is advected and oxidized in the
+  same step it is emitted. It touches only the gas, so the aerosol staged budget
+  is independent of this choice.
+* **Stage 2b after stage 2**, so particles that just grew settle at their new
+  size within the same step.
+* **Stages 3/4/4a after the physics**, so the pinned levels are exactly the CESM
+  reservoir at each step boundary. Stage 4 writes `qfroz`, which is consumed by
+  the *next* step's stage 1 — the polar caps and the open faces are always one
+  step behind by construction.
+* **Stage 5 last**, on the end-of-step state. Its `dT` feeds the *next* step's
+  microphysics, so the aerosol → radiation → temperature loop closes across the
+  step boundary, not within it.
+
+**Three nested levels of "step"** — the word is overloaded in the logs, and they
+are three different things:
+
+```
+run  =  N_HOURS/STEP_HOURS coupling steps      ("step 8/8 (h 48)")
+  step  =  the 8 stages above, once
+    stage 1  =  ~168 CFL-limited advection substeps   ("nsub=168")
+    stage 2  =  N_FAST_STEPS inner steps of FAST_DT  (60 x 360 s, driver_fast)
+```
+
+(Stage 2's inner stepping is driver-dependent: under `driver_fast.py` it is
+`N_FAST_STEPS` x `FAST_DT`, and `MICRO_SUBSTEPS` is dead — see the note at the
+top of this file. Standalone `coupling.py` uses `MICRO_SUBSTEPS` instead.)
+
+`nsub` is chosen per step from the wind field, so it varies run to run; it is the
+substep count shared by all 82 tracers (see 1.1).
+
+With `PROFILE=1` each step prints its own breakdown, which is how the stage
+costs above are measured:
+
+```
+[prof] s=0 read=0.28s advect=10.72s micro=0.23s settle=0.00s (nsub=164)
+[prof] s=0 bc+polar=2.33s
+```
+
+`read` is the CESM h1 I/O for the step and is not a stage; `advect`, `micro` and
+`settle` are stages 1, 2 and 2b, and `bc+polar` covers 3, 4 and 4a together.
+Radiation prints its own `radiation=` line on the steps it runs (`RAD_EVERY`).
+Step 0 carries JIT compilation, so read steady-state cost from step 1 onward.
+
+The `micro` timer opens *before* the `MICRO` branch, so it always includes the
+`RELHUM` read — wet settling and the wet-size diagnostics need RH too, which is
+why it is read outside the branch. Under `MICRO=off` that read is the entire
+`micro` number, as in the line above.
+
+**`MICRO=off` is not a physics configuration.** It disables stage 2 outright so
+that a timing run exercises the production step loop with only transport live —
+the aerosol moves but never evolves. Combined with `RAD=0 SETTLE=0` and no
+injection it leaves stages 1, 3, 4 and 4a, which is the transport-only benchmark
+in `MANIFEST.md`'s Running section. A typo in `MICRO` is rejected at import
+rather than falling through to the legacy `coag` path.
+
+---
+
 # 1. Transport
 
 ## 1.1 What is transported

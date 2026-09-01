@@ -21,7 +21,7 @@ Why a separate driver (not just an env flag):
     the resulting number are NOT directly comparable to the physical run. This is
     a first look at behaviour + speed of the fast engine, not an A/B match.
 
-Run: use run_prod.sh beside this file, which sets the whole production
+Run: use run_prod.py beside this file, which sets the whole production
 environment (GPU pin,
 libcuda path, memory policy) and execs this file. Direct invocation for a short
 test, once tomas-jax and jax-rrtmgp are importable -- `git submodule update
@@ -79,8 +79,14 @@ os.environ.setdefault('OUT_TAG', 'tomas_fast')
 
 if os.environ.get('STEP_HOURS', '6') != '6':
     sys.exit("driver_fast: STEP_HOURS must be 6 (parity with 6h step)")
-if os.environ.get('MICRO', 'full') != 'full':
-    sys.exit("driver_fast: MICRO must be 'full'")
+# MICRO=off (transport only, for timing runs) is allowed through: it simply never
+# calls the fast engine, so the 40-bin/6h parity constraints below do not apply to
+# it, and a benchmark then measures advection through the PRODUCTION entry point
+# rather than through a second launcher that can drift from it. The legacy 'coag'
+# path is still refused -- this driver exists to swap the fast engine into the full
+# chain, and pairing it with the pre-SAI model would silently be neither.
+if os.environ.get('MICRO', 'full') not in ('full', 'off'):
+    sys.exit("driver_fast: MICRO must be 'full' (or 'off' for a transport-only run)")
 if os.environ.get('N_BINS', '0') not in ('0', '40'):
     sys.exit(f"driver_fast: fast model is 40-bin -- unset N_BINS or set "
              f"40; got N_BINS={os.environ.get('N_BINS')}")
@@ -99,7 +105,7 @@ import jax.numpy as jnp
 # SO2 oxidation at all -- in every OH_SZA=1 run. coupling.py now owns the fit.
 
 import coupling as C
-from fct_fast import advect_hour_batch as _fast_advect
+from fct_fast import advect_step_batch as _fast_advect
 # The tomas_jax.fast adapter. MUST be imported here, BELOW the
 # os.environ.setdefault block above and not at the top of the file: it imports
 # coupling.py, and coupling.py reads the environment at import time, so hoisting
@@ -121,10 +127,10 @@ _ADV_DTYPE = jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float
 #        caps). Residual ~3e-4/day; cheaper. Kept as the validated fallback.
 _ADV_SCHEME = os.environ.get('ADV_SCHEME', 'lr').lower()
 if _ADV_SCHEME == 'lr':
-    from fct_lr import advect_hour_batch as _adv_fn
+    from fct_lr import advect_step_batch as _adv_fn
 else:
     _adv_fn = _fast_advect
-C.advect_hour_batch = functools.partial(_adv_fn, cfl=_ADV_CFL, dtype=_ADV_DTYPE)
+C.advect_step_batch = functools.partial(_adv_fn, cfl=_ADV_CFL, dtype=_ADV_DTYPE)
 
 # ---- the ONE micro swap; advection already swapped above --------------------
 C.run_microphysics_full = run_microphysics_full_fast

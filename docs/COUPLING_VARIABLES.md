@@ -144,7 +144,7 @@ chain at `MICRO_SUBSTEPS`, the fast driver at 6 h/`FAST_DT` = 60 samples/step fe
 
 ### Fast reduced model (`driver_fast.py`, tomas_jax.fast)
 `FAST_DT` (360 s inner step), `FAST_CELL_CAP` (module 250000 cells/chunk;
-`run_prod.sh` hard-sets **50000**, which is faster — see MANIFEST),
+`run_prod.py` hard-sets **50000**, which is faster — see MANIFEST),
 `FAST_FN_SCALE` (nucleation scale), `FAST_COAG_SUB_CAP` (256),
 `FAST_COND_SUB_CAP` (40), `FAST_COAG_CMAX` (0.05), `FAST_SORT` (stiffness-sort).
 

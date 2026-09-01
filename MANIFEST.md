@@ -50,8 +50,8 @@ src/advection/fct_fast.py   PPM/Zalesak primitives that fct_lr imports
 src/microphysics/tomas_fast.py  the tomas_jax.fast adapter (coupling state <-> FastState)
 inputs/rad_data/            palmer_williams_h2so4.dat (Palmer & Williams 1975,
                             as distributed in HITRAN Aerosols-2016)
-src/run_prod.sh             the production launcher (self-documenting header)
-scripts/utils/plot_run.py   the three post-run figures (dashboard, filmstrip, size dist)
+src/run_prod.py             the production launcher (self-documenting header)
+scripts/utils/plot_run.py   the four post-run figures (dashboard, filmstrip, size dist, zonal)
 scripts/utils/gif_run.py    animated versions of the filmstrip panels
 docs/                       CONFIGURATION (every env var), VALIDATION (the harnesses),
                             PROCESSES, COUPLING_VARIABLES, BOUNDARY_CONDITIONS, README
@@ -67,7 +67,7 @@ outputs/                    derived figures and tables. Gitignored
 **Analysis scripts are flat and read `coupled_*_<TAG>.npz` from the current working
 directory**, so run them from wherever the outputs are. Outputs land in whatever
 directory you launch from, and `.gitignore` excludes `*.npz/*.png/*.gif/*.log`
-— which hides a misplaced run rather than preventing it, so `run_prod.sh`
+— which hides a misplaced run rather than preventing it, so `run_prod.py`
 refuses to start with the repo as `$PWD`. Keep a runs directory outside the tree.
 
 ## Setup from a fresh clone
@@ -80,7 +80,7 @@ git -C jax-rrtmgp apply ../AIDE-SAI-link/patches/jax-rrtmgp-zenith.patch  # requ
 pip install -r AIDE-SAI-link/requirements.txt
 pip install --upgrade "jax[cuda12]>=0.6.2"     # GPU wheel; the CPU one is unusable for production
 mkdir -p runs && cd runs                                     # outputs go OUTSIDE the repo
-N_HOURS=6 OUT_TAG=smoke ../AIDE-SAI-link/src/run_prod.sh         # smoke test first
+N_HOURS=6 OUT_TAG=smoke ../AIDE-SAI-link/src/run_prod.py         # smoke test first
 ```
 
 **Neither submodule is usable as a plain checkout of its default branch**, and
@@ -106,7 +106,7 @@ conversion, uncommitted and reproducible only by whoever had applied it.
 | `tomas-jax` | separate repo (microphysics) | `$TOMAS_JAX_PATH`, else `models/tomas-jax`, else the normal import path |
 | `jax-rrtmgp` | separate repo (radiation) | `$RRTMGP_PATH`, same order. `RAD=0` skips radiation and this dependency |
 | CESM `h1` hourly meteorology + MAM4 | ~23 TB as archived | **On the shared H100 box, nothing to set** — the `coupling.py` defaults resolve to the FWHIST archive under `/data`, world-readable. Elsewhere: `$CESM_DIR` (+ `CESM_PREFIX`, `CESM_SUF`). Layout: `$CESM_DIR/hour_1/$CESM_PREFIX.h1.<VAR>$CESM_SUF`. Variables: `docs/COUPLING_VARIABLES.md`. Reads are one hour × band levels at a time (~5.3 MB per variable-hour), so a subset suffices: ~3.6 GB for 2 days, ~160 GB for 90 days |
-| CUDA driver library | site-specific | `run_prod.sh` puts `$CUDA_DRIVER_LIB` on `LD_LIBRARY_PATH`. Where libcuda.so.1 is not on the loader path JAX **silently falls back to CPU**; set the variable, or empty it for a normal CUDA install |
+| CUDA driver library | site-specific | `run_prod.py` puts `$CUDA_DRIVER_LIB` on `LD_LIBRARY_PATH`. Where libcuda.so.1 is not on the loader path JAX **silently falls back to CPU**; set the variable, or empty it for a normal CUDA install |
 
 An env var that is set but points nowhere is an error, not a silent fallback; a
 missing CESM file names the variable that built the path.
@@ -116,14 +116,14 @@ working combo is **system python3** with GPU jax.
 
 ## Running
 
-**`run_prod.sh` sets every knob except the SCENARIO.** A bare run is *not* the
+**`run_prod.py` sets every knob except the SCENARIO.** A bare run is *not* the
 production config: `INJ_SO2_TG_YR` defaults to **0 = no injection**, so a forgotten
 flag gives an obviously unforced baseline rather than a silent 10 Tg/yr SAI result.
 State the amount and give the scenario its own tag.
 
 **Launch from a runs directory, never the repo.** Every output path is relative
 to the working directory, so that directory is where the run lands.
-`run_prod.sh` **refuses to start** with the repo as `$PWD` — the mistake is
+`run_prod.py` **refuses to start** with the repo as `$PWD` — the mistake is
 otherwise invisible, since `.npz`/`.png` are gitignored and a misplaced run looks
 entirely normal while filling the tree (29 GB accumulated that way before
 2026-08-12). The script still execs `driver_fast.py` from its own tree, so it
@@ -132,15 +132,52 @@ runs the code you edited regardless of where you launched it.
 ```bash
 cd <runs dir>                                     # NOT the repo; outputs land here
 REPO=/path/to/AIDE-SAI-link
-INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh   # the 10 Tg/yr scenario, 90 days, ~33 h
-$REPO/src/run_prod.sh                                    # NO-INJECTION control (INJ_SO2_TG_YR=0)
-RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.sh   # continue that scenario
+INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.py   # the 10 Tg/yr scenario, 90 days, ~3.5 h
+$REPO/src/run_prod.py                                    # NO-INJECTION control (INJ_SO2_TG_YR=0)
+RESUME=1 INJ_SO2_TG_YR=10 OUT_TAG=prod90d $REPO/src/run_prod.py   # continue that scenario
 ```
 
 Two checkouts launched from the *same* runs directory with the same `OUT_TAG`
 overwrite each other. `OUT_TAG` discipline is what keeps runs apart.
 
-`run_prod.sh` pins a **single** GPU (`CUDA_VISIBLE_DEVICES=${GPU:-0}`) rather than
+**Narrowing a run to one process.** Each coupling step walks a fixed stage list
+(`docs/PROCESSES.md` §0), and each stage has an env flag that switches it off, so
+a run can be reduced to the process being measured. Transport only:
+
+```bash
+MICRO=off RAD=0 SETTLE=0 STATE_CKPT=0 FRAME_EVERY=48 N_HOURS=48 \
+  OUT_TAG=speed-benchmark $REPO/src/run_prod.py          # 8 steps, ~100 s
+```
+
+`MICRO=off` (2026-08-27) disables microphysics outright — a benchmark/diagnostic
+mode, **not** a physics configuration: the aerosol is advected but never evolves.
+It goes through the production step loop rather than a separate harness, so what
+is measured is the advection the model actually runs. `MICRO` is validated at
+import (`full|coag|off`); it previously fell through to the legacy `coag` path on
+a typo. `driver_fast.py` accepts `full` and `off` only — pairing the fast engine
+with the pre-SAI `coag` model would silently be neither.
+
+Set `FRAME_EVERY` to the run **length**, not 0: `FRAME_EVERY_STEPS` is
+`max(1, FRAME_EVERY/STEP_HOURS)`, so 0 means a frame every step. `STATE_CKPT=0`
+suppresses the restart cycle; `coupled_final_<TAG>.npz` is still written
+unconditionally and is the bulk of the output.
+
+Measured on one H100 at the production grid (192×288, 24 levels, 1,327,104 cells)
+and production transport settings (`fct_lr`, `ADV_F32=1`, `ADV_CFL=0.5`,
+`ADV_VPOS=1`): **7.2 s/step of advection** in steady state (10.7 s on step 0,
+which carries JIT), at ~168 CFL substeps → **43 ms/substep**, plus 1.5 s of
+`bc+polar`. That is ~43 min of advection over a 360-step 90-day run, i.e. ~2% of
+a full step. Full-physics cost, measured over a complete 1-year run
+(`runs/prod1yr/`, 2026-08-28): **34.9 s/step** — micro 16.5 s (47%), radiation
+9.4 s (27%), advection 7.4 s (21%), rest 1.7 s — and **flat over the year**
+(quarter means 35.8/34.1/35.5/34.2 s, no stage drifting >15%). Burden growth does
+not make steps more expensive. The 340–370 s/step and "microphysics ~94%" figures
+that this repo carried until 2026-08-28 described the pre-2026-08-13 tomas-jax
+engine and are superseded. Per-step cost tracks `nsub`, so quote the per-substep figure. As a check on
+the mode itself, `N/N0` finished at 0.9998 over 8 steps of pure advection, matching
+the 0.99987 recorded for the `ADV_VPOS` limiter in `run_prod.py`.
+
+`run_prod.py` pins a **single** GPU (`CUDA_VISIBLE_DEVICES=${GPU:-0}`) rather than
 auto-selecting one, so the card a long run lands on is never a function of what
 else happened to be idle at launch. Microphysics shards across all *visible*
 devices, so exporting more than one card is what makes it multi-GPU.
@@ -200,9 +237,11 @@ In practice you set nothing: `validate_vpos_f32.py` already defaults to
 `ADV_CFL=0.5` / `ADV_F32=1`, and `coupling.py` and `driver_fast.py` pin the same
 values explicitly, so the `ADV_F32=1 ADV_CFL=0.5` prefix these commands once
 carried is a no-op. The rule binds in exactly one place: calling
-`fct_lr.advect_hour_batch` **directly**, e.g. from a new test. Its signature
+`fct_lr.advect_step_batch` **directly**, e.g. from a new test. Its signature
 defaults (`cfl=0.2`, `float64`) are a configuration no run uses, so a bare call
-passes for reasons that do not transfer. See `docs/VALIDATION.md`.
+passes for reasons that do not transfer. `dt_total` has no default at all — it
+is the coupling step (`STEP_SEC`), and the 1 h default it used to carry made a
+caller who omitted it advect a sixth of the interval, silently. See `docs/VALIDATION.md`.
 
 **Run the harnesses by absolute path from wherever the output is, not from the
 repo.** Python puts the *script's* directory on `sys.path`, never the cwd, so
@@ -242,7 +281,7 @@ where `validate_radiation.py` drops its figure.
 - Diagnostic core window is **symmetric**, `-1` per end → 1.6–121.5 hPa, 22/24
   levels, excluding exactly the two levels the reservoir is written into.
 - **`ADV_VPOS`** vertical positivity limiter in `fct_lr.py`, default **ON** and set
-  explicitly by `run_prod.sh` so the log records it. `ADV_VPOS=0` is a forensic
+  explicitly by `run_prod.py` so the log records it. `ADV_VPOS=0` is a forensic
   escape hatch, not a supported configuration. Lin-Rood is exactly conservative but
   not positive; its vertical remap undershot on the steep ultrafine gradient at the
   injection ring and the clip turned that into a spurious number source. 100% of

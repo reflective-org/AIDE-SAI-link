@@ -76,7 +76,7 @@ DPB = np.asarray(DP_BIN)[:NBINS]
 
 def run_step(mod, q, t):
     u0, v0, w0 = winds(t); u1, v1, w1 = winds(t + 6)
-    out = mod.advect_hour_batch(jnp.asarray(q),
+    out = mod.advect_step_batch(jnp.asarray(q),
                                jnp.asarray(u0), jnp.asarray(v0), jnp.asarray(w0),
                                jnp.asarray(u1), jnp.asarray(v1), jnp.asarray(w1),
                                lat=lat, dp=DP, qfrozb=jnp.asarray(q),

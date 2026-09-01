@@ -6,7 +6,7 @@ and this folder's logs). This file is a SELF-CONTAINED copy so the production
 below are copied VERBATIM from fct_core.py (same scheme, same comments); only
 three things differ, all opt-in:
 
-  1. `dtype` knob on advect_hour_batch (default float64 == baseline). float32
+  1. `dtype` knob on advect_step_batch (default float64 == baseline). float32
      roughly halves memory + bandwidth (~2x). The tracer field is cast to
      `dtype` for the sweeps and cast back to float64 on return so the rest of
      the coupled model still sees float64.
@@ -582,12 +582,16 @@ def _advect_step_dev_batch(qb, u0, v0, w0, u1, v1, w1, dt_sub, n, nv,
     return jax.lax.fori_loop(0, n, body, (qb, vf0))
 
 
-def advect_hour_batch(qb0, u0, v0, w0, u1, v1, w1,
-                      lat, dp, qfrozb, lat_freeze=80.0,
-                      cfl=0.2, dt_total=3600.0, dtype=jnp.float64,
+def advect_step_batch(qb0, u0, v0, w0, u1, v1, w1,
+                      lat, dp, qfrozb, dt_total, lat_freeze=80.0,
+                      cfl=0.2, dtype=jnp.float64,
                       metric=None, polar_mode=None, dxfix=None, wcont=None,
                       return_vflux=False):
-    """Advect a STACK of tracers qb0 (ntracer,nlev,nlat,nlon) over one hour.
+    """Advect a STACK of tracers qb0 (ntracer,nlev,nlat,nlon) over dt_total.
+
+    dt_total is the coupling step (coupling.STEP_SEC), NOT one hour: u0/w0 and
+    u1/w1 are the CESM wind snapshots bracketing that step, and the winds are
+    linearly interpolated between them at each substep midpoint.
 
     dtype: precision of the transport sweeps (jnp.float32 or jnp.float64).
     Everything is cast to `dtype` for the substep loop and the result cast back

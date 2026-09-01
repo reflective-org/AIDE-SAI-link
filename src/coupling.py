@@ -30,12 +30,12 @@ Initialization: CESM MAM4 modal aerosol (num_a{1,2,3}, so4_a{1,2,3}) is binned
 onto the 40-bin TOMAS grid via per-mode dry log-normal distributions.
 
 Open vertical boundaries (same rationale as ../advection/fct_openbc.py): the
-top N_BC_TOP and bottom N_BC_BOT band levels are reset every hour to hourly
-CESM MAM4 aerosol binned onto the TOMAS grid. These reservoirs carry the net
-effect of all the physics outside/off in this MVP (emissions, nucleation,
+top N_BC_TOP and bottom N_BC_BOT band levels are reset every coupling step to
+the hourly CESM MAM4 aerosol binned onto the TOMAS grid. These reservoirs
+carry the net effect of all the physics outside/off in this MVP (emissions, nucleation,
 condensation, wet removal), giving a flux-through system instead of a sealed
-one. The polar caps (|lat| > LAT_FREEZE) are likewise refreshed to hourly MAM4
-rather than frozen at the IC. Number and mass are always pinned as a
+one. The polar caps (|lat| > LAT_FREEZE) are likewise refreshed from MAM4 every
+step rather than frozen at the IC. Number and mass are always pinned as a
 consistent (Nk, Mk) pair from the same binning, never rescaled separately.
 NO global mass fixer: with open boundaries the burden legitimately changes.
 
@@ -163,7 +163,7 @@ from tomas_jax.physics.ezcond_ppm_jax import ezcond_ppm_jax
 import settling
 
 # --- advection: fct_lr, the production scheme, at the production config --------
-# This used to be `from fct_core import advect_hour_batch`, i.e. the legacy
+# This used to be `from fct_core import advect_step_batch`, i.e. the legacy
 # sealed-face sweep. Nothing ever ran it: driver_fast.py rebinds this module's
 # global to fct_lr before main() starts, so the only way to reach fct_core was to
 # run coupling.py bare -- which silently gave you DIFFERENT transport (sealed
@@ -182,8 +182,8 @@ import settling
 # treatment -- see the note at that probe.
 import functools
 import fct_lr                      # src/advection/, put on sys.path by _paths
-advect_hour_batch = functools.partial(
-    fct_lr.advect_hour_batch,
+advect_step_batch = functools.partial(
+    fct_lr.advect_step_batch,
     cfl=float(os.environ.get('ADV_CFL', '0.5')),
     dtype=jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float64)
 
@@ -283,8 +283,18 @@ N_BC_BOT = int(os.environ.get('N_BC_BOT', '1'))  # bottom band levels pinned to 
 PROBE_HPA  = float(os.environ.get('PROBE_HPA', '50')) # level [hPa] for diagnostics/frames
 # ---- SAI sources & sinks (SO2 -> H2SO4 -> SO4 chain + settling) ----------
 # 'full' = so2_chemistry + nucleation + coagulation + condensation per cell;
-# 'coag' = legacy coagulation-only path (bit-identical to the pre-SAI model)
+# 'coag' = legacy coagulation-only path (bit-identical to the pre-SAI model);
+# 'off'  = NO microphysics at all -- transport only. Added 2026-08-27 for
+#          timing/benchmark runs: it goes through the same step loop (advection,
+#          boundaries, budget, checkpointing) so what is measured is the
+#          production advection, not a separate harness that can drift from it.
+#          Not a physics configuration -- the aerosol only moves, never evolves.
 MICRO_MODE = os.environ.get('MICRO', 'full')
+# Validate here rather than letting a typo fall through to the legacy 'coag'
+# branch: MICRO=fulll would otherwise silently run -- and be reported as -- the
+# pre-SAI coagulation-only model.
+if MICRO_MODE not in ('full', 'coag', 'off'):
+    raise SystemExit(f"coupling: MICRO must be full|coag|off, got {MICRO_MODE!r}")
 # full-micro substeps per coupling step. One 6 h condensation/nucleation call
 # is too coarse right after an injection pulse (the growth solvers assume the
 # gas is quasi-constant over dt), so default to 1 h pieces at STEP_HOURS=6.
@@ -303,9 +313,9 @@ INJ_LAT  = float(os.environ.get('INJ_LAT', '0.0'))
 _INJ_LON_DEFAULT = 180.0
 INJ_LON  = float(os.environ.get('INJ_LON', str(_INJ_LON_DEFAULT)))
 INJ_HPA  = float(os.environ.get('INJ_HPA', '55.0'))
-# Default 1 (zonal ring), matching run_prod.sh's production config -- until
+# Default 1 (zonal ring), matching run_prod.py's production config -- until
 # 2026-08-03 this defaulted to 0 (single cell), so a bare `python3 coupling.py`
-# and a bare `./run_prod.sh` injected at DIFFERENT geometries. run_prod.sh always
+# and a bare `./run_prod.py` injected at DIFFERENT geometries. run_prod.py always
 # exports this explicitly, so production itself was never affected; only the
 # standalone/dev path was.
 INJ_ZONAL = os.environ.get('INJ_ZONAL', '1') != '0'  # 1 = spread over the full lat ring
@@ -492,8 +502,26 @@ ARF_AVG_H  = float(os.environ.get('ARF_AVG_H', '24'))
 # always from the same step and restore consistently.
 STATE_CKPT = os.environ.get('STATE_CKPT', '1') != '0'
 RESUME     = os.environ.get('RESUME', '0') != '0'
-LOG_EVERY  = int(os.environ.get('LOG_EVERY', '1'))    # progress line every N hours
+LOG_EVERY  = int(os.environ.get('LOG_EVERY', '1'))    # progress line every N steps
 FRAME_EVERY = int(os.environ.get('FRAME_EVERY', '24'))  # save size-bin snapshot every N hours
+# What the spatial frames COVER vertically. Independent of FRAME_EVERY, which
+# sets how OFTEN they are written.
+#   'probe' (default)  full lat-lon at the single PROBE_HPA level, per bin --
+#                      what the filmstrip, the so4/dTrad gifs and the size-dist
+#                      read. ~13 GB for a 366-frame year.
+#   'all'              the above PLUS a ZONAL-MEAN frame at EVERY band level,
+#                      per bin: (nf, NBINS, nlev, nlat). Unlocks a Hovmoller at
+#                      any altitude and a lat-height animation; +1.1 GB/year.
+# 'all' is a zonal MEAN and not a full 3-D history on purpose: per-bin 3-D
+# frames are (nf, NBINS, nlev, nlat, nlon) = ~155 GB for a year, 12x the probe
+# history, for a field nothing in this repo plots at full longitude resolution.
+# It ADDS to the probe slabs rather than replacing them so every existing figure
+# keeps reading exactly what it always read.
+FRAME_LEVELS = os.environ.get('FRAME_LEVELS', 'probe').lower()
+if FRAME_LEVELS not in ('probe', 'all'):
+    raise SystemExit(f"FRAME_LEVELS={FRAME_LEVELS!r} is not valid: "
+                     "use 'probe' (single PROBE_HPA level) or 'all' "
+                     "(adds a zonal-mean frame at every band level)")
 OUT_TAG    = os.environ.get('OUT_TAG', f'{N_DAYS}day')
 
 # MAM4 mode geometric standard deviations (CESM MAM4 prescribed)
@@ -536,7 +564,7 @@ _INIT_BIN = os.environ.get('INIT_BIN', 'so4').lower()
 N_HOURS   = int(os.environ.get('N_HOURS', 24 * N_DAYS))   # override for smoke tests
 
 # Aerosol IC / boundary-fill source: 'mam4' (default) bins CESM MAM4 modes onto
-# the TOMAS grid at every hour (evolving reservoir). 'carma' projects a CARMA
+# the TOMAS grid at every coupling step (evolving reservoir). 'carma' projects a CARMA
 # sulfate size distribution (PRSUL pure + MXAER mixed-group sulfate) onto the
 # grid ONCE as a static reservoir (the CARMA run is a different epoch -- 1991
 # pre-Pinatubo background -- so it is not time-matched to the CESM meteorology;
@@ -671,8 +699,8 @@ def bin_mam4(ds_by_var, t, levs, lat_idx=None):
     lat_idx : optional latitude indices (default: all latitudes)
     Returns num (NBINS,nlev_s,nlat_s,nlon)  [#/kg]
             mas (NBINS,nlev_s,nlat_s,nlon)  [kg/kg]
-    Used for the IC (all levels), the hourly open-BC slabs (edge levels) and
-    the hourly polar-cap refresh (all levels, polar lats). num/mas always come
+    Used for the IC (all levels), the per-step open-BC slabs (edge levels) and
+    the per-step polar-cap refresh (all levels, polar lats). num/mas always come
     from the same binning so each bin's (Nk, Mk) pair is physically consistent.
     """
     def read(var):
@@ -1042,7 +1070,7 @@ _micro_pmap = jax.pmap(jax.vmap(_micro_cell, in_axes=(0,) * 8))
 
 
 def run_microphysics(num, mas, temp3d, pres3d, wgt3d):
-    """Advance coagulation one hour over the whole band.
+    """Advance coagulation one coupling step (DT_MICRO) over the whole band.
 
     num, mas : (NBINS, nlev, nlat, nlon) mixing ratios
     temp3d   : (nlev,nlat,nlon) [K]      pres3d: (nlev,nlat,nlon) [Pa]
@@ -1482,7 +1510,7 @@ def main():
     # aer_fill(t, levs, lat_idx) returns (num[#/kg], mas[kg/kg]) with the SAME
     # signature and (num,mas) consistency as bin_mam4, so the IC / open-BC /
     # polar / radiation-reference call sites are source-agnostic. MAM4 re-bins
-    # per hour (t used); CARMA is a static reservoir built once (t ignored).
+    # per step (t used); CARMA is a static reservoir built once (t ignored).
     if AER_SRC == 'carma':
         print(f"=== initializing size bins from CARMA (frame {CARMA_FRAME}, "
               f"rho={CARMA_RHO:.0f}) ===", flush=True)
@@ -1514,8 +1542,8 @@ def main():
           f"init N burden(sum num)={float(num.sum()):.3e}, "
           f"M burden(sum mas)={float(mas.sum()):.3e}", flush=True)
 
-    # polar freeze target; starts at the IC and is refreshed to hourly MAM4
-    # at the end of each hour (so hour h advects against hour-h polar values)
+    # polar freeze target; starts at the IC and is refreshed from MAM4 at the
+    # end of each step (so a step advects against its own end-hour polar values)
     # (gases ride along in the same stack: rows 2*NBINS and 2*NBINS+1)
     qfroz = jnp.concatenate([num, mas, so2[None], h2so4[None]], axis=0)  # (ntr,nlev,nlat,nlon)
     # apply the bottom-face aerosol inflow scaling to step 0 as well (the per-step
@@ -1529,7 +1557,7 @@ def main():
     lev_bot = klevs[-N_BC_BOT:]
 
     # Can the active advection driver report the vertical face exchange? The fast
-    # drivers monkeypatch advect_hour_batch, so ask the object we actually hold
+    # drivers monkeypatch advect_step_batch, so ask the object we actually hold
     # rather than assuming. fct_lr (the default since 2026-08-03, and what
     # driver_fast.py rebinds to) can; the legacy sealed-face fct_core cannot, so
     # this answers False only if something restores that import by hand.
@@ -1539,7 +1567,7 @@ def main():
     import inspect
     try:
         ADV_VFLUX = ('return_vflux' in
-                     inspect.signature(advect_hour_batch).parameters) and ADV_WCONT
+                     inspect.signature(advect_step_batch).parameters) and ADV_WCONT
     except (TypeError, ValueError):
         ADV_VFLUX = False
     # With ADV_WCONT the vertical faces are a real FLUX boundary (inflow at the
@@ -1740,7 +1768,7 @@ def main():
         # the default INJ_ZONAL=1 produces N identical runs under N different tags,
         # and nothing in the log distinguishes them (the location string prints
         # 'zonal ring' and omits the longitude entirely). Compared against the
-        # default rather than mere presence in os.environ, because run_prod.sh
+        # default rather than mere presence in os.environ, because run_prod.py
         # always exports INJ_LON to document its default -- presence would warn on
         # every ordinary run and get ignored.
         if INJ_MIRROR and j_mir == j_inj:
@@ -1813,6 +1841,39 @@ def main():
     cumV = {'in': 0.0, 'out': 0.0}
     frames_num = []; frames_mas = []; frames_dT = []; frame_hours = []
     frames_so2 = []; frames_h2so4 = []
+    # FRAME_LEVELS='all' keeps a zonal-mean frame at every level BESIDE the probe
+    # slabs. It carries its OWN hour list rather than being index-aligned to
+    # frame_hours: a RESUME from a checkpoint written under FRAME_LEVELS=probe
+    # has no zonal history at all, so this list is legitimately shorter, and a
+    # file that says so is one a plot can read without guessing an offset.
+    frames_zm_num = []; frames_zm_mas = []; frames_zm_dT = []
+    frames_zm_so2 = []; frames_zm_h2so4 = []; frames_zm_hours = []
+
+    def _zm_capture(hr):
+        """Append one zonal-mean frame (mean over longitude) at every level."""
+        if FRAME_LEVELS != 'all':
+            return
+        # PLAIN mean over longitude. Every cell in a latitude row has the same
+        # area on this grid, so no cos(lat) weight belongs here -- that metric is
+        # a MERIDIONAL mean's, and folding it in would double-count against the
+        # wlat_full() weighting the plots already apply.
+        frames_zm_num.append(np.asarray(num.mean(axis=3)).copy())
+        frames_zm_mas.append(np.asarray(mas.mean(axis=3)).copy())
+        frames_zm_dT.append(np.asarray(dT_rad.mean(axis=2)).copy())
+        frames_zm_so2.append(np.asarray(so2.mean(axis=2)).copy())
+        frames_zm_h2so4.append(np.asarray(h2so4.mean(axis=2)).copy())
+        frames_zm_hours.append(int(hr))
+
+    def _zm_arrays():
+        """Zonal-mean arrays for a savez call; empty when none were captured."""
+        if not frames_zm_hours:
+            return {}
+        return dict(frames_zm_hours=np.array(frames_zm_hours),
+                    frames_zm_num=np.stack(frames_zm_num),
+                    frames_zm_mas=np.stack(frames_zm_mas),
+                    frames_zm_dT=np.stack(frames_zm_dT),
+                    frames_zm_so2=np.stack(frames_zm_so2),
+                    frames_zm_h2so4=np.stack(frames_zm_h2so4))
     KPROBE = int(np.argmin(np.abs(PLEV_PA / 100 - PROBE_HPA)))   # diagnostic probe level
     _res = 'per-step MAM4' if AER_SRC == 'mam4' else 'static CARMA'
     _edge = _bc_edge0
@@ -1842,7 +1903,11 @@ def main():
           + f"; y-metric {'on' if ADV_METRIC else 'OFF'}, "
           + f"dx-fix {'on' if os.environ.get('ADV_DXFIX','1') != '0' else 'OFF'}; "
           + "NO mass fixer (open system)", flush=True)
-    print(f"  probe/frames at {PLEV_PA[KPROBE]/100:.1f} hPa", flush=True)
+    print(f"  probe/frames at {PLEV_PA[KPROBE]/100:.1f} hPa"
+          + ("; FRAME_LEVELS=all -> plus a zonal-mean frame at all "
+             f"{nlev} levels ({PLEV_PA[0]/100:.1f}-{PLEV_PA[-1]/100:.1f} hPa)"
+             if FRAME_LEVELS == 'all' else
+             "; FRAME_LEVELS=probe (this level only)"), flush=True)
 
     # capture the true initial state as frame 0
     frames_num.append(np.asarray(num[:, KPROBE]).copy())
@@ -1851,6 +1916,7 @@ def main():
     frames_so2.append(np.asarray(so2[KPROBE]).copy())
     frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
     frame_hours.append(0)
+    _zm_capture(0)
 
     N_STEPS = N_HOURS // STEP_HOURS
     FRAME_EVERY_STEPS = max(1, round(FRAME_EVERY / STEP_HOURS))
@@ -1965,6 +2031,23 @@ def main():
             frames_dT = [a.copy() for a in _fk['frames_dT']]
             frames_so2 = [a.copy() for a in _fk['frames_so2']]
             frames_h2so4 = [a.copy() for a in _fk['frames_h2so4']]
+            # Zonal history is OPTIONAL on the way in: a checkpoint written
+            # before FRAME_LEVELS existed, or under FRAME_LEVELS=probe, simply
+            # has none. Starting it empty is correct rather than an error --
+            # frames_zm_hours records where it really begins, so the gap is
+            # visible in the file instead of being silently mis-aligned.
+            if 'frames_zm_hours' in _fk.files:
+                frames_zm_hours = [int(h) for h in _fk['frames_zm_hours']]
+                frames_zm_num = [a.copy() for a in _fk['frames_zm_num']]
+                frames_zm_mas = [a.copy() for a in _fk['frames_zm_mas']]
+                frames_zm_dT = [a.copy() for a in _fk['frames_zm_dT']]
+                frames_zm_so2 = [a.copy() for a in _fk['frames_zm_so2']]
+                frames_zm_h2so4 = [a.copy() for a in _fk['frames_zm_h2so4']]
+            elif FRAME_LEVELS == 'all':
+                print("  NOTE: FRAME_LEVELS=all but the frames ckpt has no zonal "
+                      "history (written under FRAME_LEVELS=probe).\n"
+                      "    The zonal frames will start at this resume point; the "
+                      "probe-level history is unaffected.", flush=True)
         except Exception as _e:
             print(f"  WARNING: frames ckpt {_ff} is unreadable "
                   f"({type(_e).__name__}: {_e}).\n"
@@ -1979,6 +2062,8 @@ def main():
             frame_hours = []
             frames_num = []; frames_mas = []; frames_dT = []
             frames_so2 = []; frames_h2so4 = []
+            frames_zm_num = []; frames_zm_mas = []; frames_zm_dT = []
+            frames_zm_so2 = []; frames_zm_h2so4 = []; frames_zm_hours = []
         # The timeseries ckpt gets the same treatment as the frames one above, and
         # for the same reason: it is a DIAGNOSTIC record, not the physics. Every
         # cumulative counter the run needs to continue correctly (cumB/cumV, the
@@ -2037,6 +2122,18 @@ def main():
             frames_h2so4 = frames_h2so4[:_keep]
             print(f"  NOTE: frames ckpt ran {_ndrop_fr} frame(s) past the state "
                   f"(h>{_h_state}); trimmed to stay consistent.", flush=True)
+        # the zonal history is trimmed against ITS OWN hours, not against _keep:
+        # it can be shorter than frame_hours (see the resume note above), so
+        # reusing the probe-slab count here would cut the wrong number of frames
+        _ndrop_zm = sum(1 for h in frames_zm_hours if h > _h_state)
+        if _ndrop_zm:
+            _kz = len(frames_zm_hours) - _ndrop_zm
+            frames_zm_hours = frames_zm_hours[:_kz]
+            frames_zm_num = frames_zm_num[:_kz]; frames_zm_mas = frames_zm_mas[:_kz]
+            frames_zm_dT = frames_zm_dT[:_kz]; frames_zm_so2 = frames_zm_so2[:_kz]
+            frames_zm_h2so4 = frames_zm_h2so4[:_kz]
+            print(f"  NOTE: zonal frames ran {_ndrop_zm} frame(s) past the state; "
+                  f"trimmed.", flush=True)
 
         # ---- frames history BEHIND the state (a hole, not an overrun) --------
         # The trim above fixes frames that are too NEW. The opposite case is not a
@@ -2114,7 +2211,7 @@ def main():
             h2so4 = h2so4 + inj_dq_h2so4
             inj_h2so4_cum += float((inj_dq_h2so4 * A_j).sum())
 
-        # budget checkpoint: burden at the start of this hour (== end of prev)
+        # budget checkpoint: burden at the start of this step (== end of prev)
         M_start_np = Mbur(mas, 'np'); M_start_pol = Mbur(mas, 'pol')
 
         # ---- 1. transport (advect all 82 tracers with shared winds) ----
@@ -2129,7 +2226,7 @@ def main():
         if ADV_VFLUX:
             akw['return_vflux'] = True
         if step == ntr_all:
-            out = advect_hour_batch(qb, u0, v0, w0, u1, v1, w1,
+            out = advect_step_batch(qb, u0, v0, w0, u1, v1, w1,
                                     qfrozb=qfroz, **akw)
             qb, nsub, vfl = out if ADV_VFLUX else (out[0], out[1], None)
         else:
@@ -2138,7 +2235,7 @@ def main():
             outs = []; vfs = []
             for a in range(0, ntr_all, step):
                 b = min(a + step, ntr_all)
-                out = advect_hour_batch(qb[a:b], u0, v0, w0, u1, v1, w1,
+                out = advect_step_batch(qb[a:b], u0, v0, w0, u1, v1, w1,
                                         qfrozb=qfroz[a:b], **akw)
                 outs.append(out[0]); nsub = out[1]
                 if ADV_VFLUX:
@@ -2166,7 +2263,7 @@ def main():
         num = qb[:NBINS]; mas = qb[NBINS:2*NBINS]
         so2 = qb[2*NBINS]; h2so4 = qb[2*NBINS + 1]
         # post-advection, pre-floor: separates transport (non-polar) from the
-        # polar-cap overwrite (both happen inside advect_hour_batch)
+        # polar-cap overwrite (both happen inside advect_step_batch)
         M_adv = Mbur(mas); M_adv_np = Mbur(mas, 'np'); M_adv_pol = Mbur(mas, 'pol')
         #post-advection floor. The MASS floor is budgeted below (cumB['floor']);
         #the NUMBER floor was not, and it is the bigger one: the ultrafine number
@@ -2196,12 +2293,22 @@ def main():
         tm = time.time()
         #accumulated temperature
         T3d = temp(it0) + np.asarray(dT_rad)
+        # RH is read here, OUTSIDE the MICRO branch, because it is not only a
+        # micro input: wet settling (WET_SETTLING) and every wet size diagnostic
+        # (WET_OPTICS) need it too. It used to be read inside the MICRO=full
+        # branch, which left it undefined -- a NameError one step in -- for any
+        # other micro mode.
+        rh3d = relhum(it0)
         #run microphysics on the updated temperature...clip_add and clip_rem over the mass created/destroyed (not truly mass conserving)
-        if MICRO_MODE == 'full':
+        if MICRO_MODE == 'off':
+            # transport only: nothing evolves the bins, and with no two-moment
+            # consistency clip there is no clip mass to report either. The jnp
+            # arrays pass straight through the np/jnp round-trip below.
+            num_np, mas_np, clip_add, clip_rem = num, mas, 0.0, 0.0
+        elif MICRO_MODE == 'full':
             # full chain: SO2+OH consumes so2 -> h2so4; nucleation and
             # condensation move h2so4 into the bins, so aerosol M genuinely
             # grows here (the 'micro' budget stage is now a real source)
-            rh3d = relhum(it0)
             # OH: SZA-parabola diurnal (per substep) or CESM's field (constant
             # over the step). run_microphysics_full accepts either shape.
             oh3d = oh_sza(it0) if OH_SZA else oh_molec(it0, T3d)
@@ -2324,7 +2431,7 @@ def main():
             so2   = so2.at[-N_BC_BOT:].set(jnp.asarray(so2_bot))
             h2so4 = h2so4.at[-N_BC_BOT:].set(jnp.asarray(h2so4_bot))
         #burden after the BC refill
-        M_bc = Mbur(mas)                           # after open-BC refill (== hour-end burden)
+        M_bc = Mbur(mas)                           # after open-BC refill (== step-end burden)
 
         # ---- staged mass budget: accumulate each source (normalized by M0) ----
         # checkpoints telescope, so sum(cumB) == M/M0 - 1 exactly.
@@ -2618,6 +2725,7 @@ def main():
             frames_so2.append(np.asarray(so2[KPROBE]).copy())
             frames_h2so4.append(np.asarray(h2so4[KPROBE]).copy())
             frame_hours.append(it1)
+            _zm_capture(it1)
             # incremental checkpoint: frames/timeseries are otherwise only
             # written once at the very end, so a killed/crashed multi-hour run
             # loses everything. Overwrite a single _ckpt file each frame (cheap:
@@ -2630,7 +2738,11 @@ def main():
                      frames_dT=np.stack(frames_dT),
                      frames_so2=np.stack(frames_so2),
                      frames_h2so4=np.stack(frames_h2so4),
-                     probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP)
+                     probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
+                     # the vertical/horizontal axes, so a zonal frame is
+                     # plottable from this file alone rather than needing the
+                     # final state beside it
+                     plev_pa=PLEV_PA, lat=lat, **_zm_arrays())
             savez_atomic(f'coupled_timeseries_{OUT_TAG}_ckpt.npz', N0=N0, M0=M0,
                      inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
                      phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
@@ -2693,7 +2805,8 @@ def main():
              frames_dT=np.stack(frames_dT),
              frames_so2=np.stack(frames_so2),
              frames_h2so4=np.stack(frames_h2so4),
-             probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP)
+             probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
+             plev_pa=PLEV_PA, lat=lat, **_zm_arrays())
     print(f"saved coupled_final/timeseries/frames_{OUT_TAG}.npz "
           f"({len(frame_hours)} frames)", flush=True)
 

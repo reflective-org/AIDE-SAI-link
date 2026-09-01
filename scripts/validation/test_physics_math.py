@@ -78,7 +78,7 @@ def test_wet_size():
     """Growth factor D_wet/D_dry against the range the model reports itself."""
     m = 1.0e-18                              # kg dry SO4/particle, mid-range bin
 
-    # These two numbers are NOT invented for this test: run_prod.sh's own header
+    # These two numbers are NOT invented for this test: run_prod.py's own header
     # prints "15 wt% nodes 10-80%, D_wet/D_dry 1.087-2.566" at startup, so the
     # endpoints below are cross-checked against an independent artifact of the
     # production run. If a coefficient in wet_size or tang_density moves, these

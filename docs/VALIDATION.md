@@ -90,10 +90,10 @@ substep, gradients are steeper, and the limiter is under more stress.
 - `validate_vpos_f32.py` already defaults to `ADV_CFL=0.5` and `ADV_F32=1`, so
   prefixing those variables is a no-op. It is written for this test.
 - Both production entry points pin the same values explicitly — `coupling.py`
-  and `driver_fast.py` each wrap `advect_hour_batch` in a `functools.partial`
+  and `driver_fast.py` each wrap `advect_step_batch` in a `functools.partial`
   with `cfl=0.5, dtype=float32`.
 
-The one place the distinction bites is **calling `fct_lr.advect_hour_batch`
+The one place the distinction bites is **calling `fct_lr.advect_step_batch`
 directly**, e.g. in a new test. Its signature defaults are `cfl=0.2,
 dtype=float64`, which no run uses — so a bare call exercises a configuration the
 model is never in, and passes for reasons that do not transfer.

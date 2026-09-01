@@ -24,13 +24,13 @@ CESM h1 hourly fields ──► winds U,V,OMEGA ──► transport (Lin-Rood fl
 | File | Role |
 |------|------|
 | `coupling.py`  | The model: load CESM, init from MAM4, advect+microphysics loop, save. Runnable standalone. |
-| `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../src/run_prod.sh`. |
+| `driver_fast.py` | **The production entry point** — imports `coupling.py` and swaps in the batched `tomas_jax.fast` engine. Launched by `../src/run_prod.py`. |
 | `src/advection/fct_lr.py` | Lin-Rood flux-form advection — the production transport scheme. |
 | `src/advection/fct_fast.py` | PPM/Zalesak primitives that `fct_lr` imports. |
 | `fct_core.py`  | Legacy sealed-face PPM/FCT transport (from `fct.py`). **Not on the run path** as of 2026-08-03; kept only for the bit-identical legacy check in `scripts/validation/test_conservation.py`. |
 | `settling.py`  | Gravitational settling sink. |
 | `radiation.py` | RRTMGP + Mie optics. |
-| `scripts/utils/plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
+| `scripts/utils/plot_run.py`  | Diagnostics: dashboard, filmstrip, size distribution, zonal-mean mass. (Replaced `plot_coupled.py`, `plot_size_dist.py` and `viz_coupled_month.py`, all deleted 2026-08-03.) |
 | `scripts/utils/gif_run.py`   | Animated versions of the filmstrip panels. |
 
 ## State (what is tracked & advected)
@@ -75,15 +75,15 @@ model levels**, 1,327,104 cells). The band is set by `P_LO_HPA` / `P_HI_HPA`.
    bin can arrive with `Nk>0, mass≈0`. Before coagulating, each bin's mean
    particle mass is clipped into `[xk_k, xk_{k+1}]` (empty bins → 0), keeping
    `Dp` finite and well posed. The clip is *not* mass-conserving, so its
-   activity is monitored: the hourly log prints `clipM/M0 +add/-remove` for
-   the current hour, and the timeseries saves cumulative totals
+   activity is monitored: the per-step log prints `clipM/M0 +add/-remove` for
+   the current step, and the timeseries saves cumulative totals
    (`clipMadd_cum`/`clipMrem_cum`, burden-weighted; `M0` included for
    normalization). These should stay ≪ M0 — growth means the limiter is
    decoupling the two moments faster than the physics justifies.
 6. **Open vertical boundaries** (same rationale as `../advection/fct_openbc.py`).
-   The top `N_BC_TOP` and bottom `N_BC_BOT` band levels are reset every hour to
-   hourly CESM MAM4 binned onto the TOMAS grid. These Dirichlet reservoirs carry
-   the net effect of all physics outside the band (emissions, wet removal, and
+   The top `N_BC_TOP` and bottom `N_BC_BOT` band levels are reset every coupling
+   step to the hourly CESM MAM4 binned onto the TOMAS grid. These Dirichlet
+   reservoirs carry the net effect of all physics outside the band (emissions, wet removal, and
    everything below the tropopause), making the band a flux-through system
    rather than a sealed one. Number and mass are always pinned as a
    consistent `(Nk, Mk)` pair from one binning — never rescaled separately.
@@ -113,12 +113,12 @@ The model now carries the full **SO2 → H2SO4 → SO4** chain and a
   `BOUNDARY_CONDITIONS.md`.
 
 ## Run
-Production runs go through `../src/run_prod.sh` (which execs `driver_fast.py`), not
+Production runs go through `../src/run_prod.py` (which execs `driver_fast.py`), not
 these commands — see MANIFEST.md. Direct `coupling.py` invocation is the
 standalone/dev path:
 
 ```bash
-# short validation (default 2 days, hourly), single GPU
+# short validation (default 2 days at STEP_HOURS=6), single GPU
 N_DAYS=2 OUT_TAG=2day CUDA_VISIBLE_DEVICES=0 python3 src/coupling.py
 python3 scripts/utils/plot_run.py 2day
 
@@ -133,7 +133,7 @@ N_DAYS=365 OUT_TAG=1yr python3 src/coupling.py
 
 > These are the **`coupling.py` module defaults** — what you get running
 > `python3 src/coupling.py` directly. They are NOT what a production run uses:
-> `run_prod.sh` overrides or hard-sets many of them (`OUT_TAG`, `DEBUG`,
+> `run_prod.py` overrides or hard-sets many of them (`OUT_TAG`, `DEBUG`,
 > `PROFILE`, `FAST_CELL_CAP`, …). For the effective production values, and for
 > the knobs this table does not list, see
 > [CONFIGURATION.md](./CONFIGURATION.md), which is authoritative.
@@ -143,17 +143,17 @@ N_DAYS=365 OUT_TAG=1yr python3 src/coupling.py
 | `N_DAYS` / `N_HOURS` | 2 / — | run length (`N_HOURS` overrides) |
 | `N_LEV` | 0 (full band) | sub-sample the band to ~N_LEV native levels (e.g. `17` to mimic PARADIS) |
 | `H0` | 0 | start hour index into the h1 series (1996-01-01 00Z) |
-| `N_COAG_SUBSTEPS` | 3 | forward-Euler substeps per hour (legacy `MICRO=coag` path) |
+| `N_COAG_SUBSTEPS` | 3 | forward-Euler substeps per coupling step (legacy `MICRO=coag` path) |
 | `CELL_CHUNK` | 300000 | cells per microphysics vmap batch (GPU memory vs speed) |
 | `N_BC_TOP` | 1 | top band levels pinned to hourly MAM4 (open BC) |
 | `N_BC_BOT` | 1 | bottom band levels pinned to hourly MAM4 (open BC) |
 | `PROBE_HPA` | 50 | level [hPa] used for diagnostics, frames, mean-Dp |
-| `LOG_EVERY` | 1 | print a progress line every N simulated hours |
+| `LOG_EVERY` | 1 | print a progress line every N coupling steps |
 | `FRAME_EVERY` | 24 | save a probe-level size-bin snapshot every N hours |
 | `OUT_TAG` | `<N_DAYS>day` | output filename tag |
 | `PROFILE` | — | print per-hour phase timing (read / advect / micro / bc+polar) |
 | `DEBUG` | — | print finiteness of num/mas after advect & micro (hour 0) |
-| `MICRO` | `full` | `full` = SO2 chem + nucleation + coag + condensation; `coag` = legacy coag-only |
+| `MICRO` | `full` | `full` = SO2 chem + nucleation + coag + condensation; `coag` = legacy coag-only; `off` = none (transport-only benchmark, not a physics config) |
 | `MICRO_SUBSTEPS` | 6 | full-micro substeps per coupling step (6 ⇒ 1 h pieces at `STEP_HOURS=6`) |
 | `INJ_SO2_TG_YR` | **0** | SAI SO2 injection rate [Tg/yr]. Default dropped from 10 to 0 on 2026-08-03 so a forgotten flag gives an obviously unforced baseline; pass `=10` to reproduce prod90d/prod1yr |
 | `INJ_LAT` / `INJ_LON` / `INJ_HPA` | 0 / 180 / 55 | injection cell (nearest grid point / level) |
@@ -176,14 +176,15 @@ to `--user` (needed to import `tomas_jax.solvers.diffrax`; coagulation uses the
 forward-Euler path, not diffrax itself).
 
 ## Performance
-Microphysics dominates cost (**~94%** of a 90-day run, itself ~33 h on one
-H100): it solves each cell independently (levels × 192 × 288). Two levers:
+Microphysics is the largest single stage (**~47%** of a step; a 90-day run is
+~3.5 h on one H100): it solves each cell independently (levels × 192 × 288).
+Two levers:
 - **`N_LEV`** sub-samples the vertical (cost is linear in cell count). 17 levels
   ≈ 1.4× fewer cells than the full 24-level band — and matches the intended
   PARADIS vertical grid, so the level set is directly swappable later.
 - **Multi-GPU:** microphysics is `pmap`-sharded across all *visible* GPUs
   automatically (per-cell independent), so `CUDA_VISIBLE_DEVICES` selects the
-  scale. `run_prod.sh` deliberately pins a **single** card (`GPU=0`) — on a
+  scale. `run_prod.py` deliberately pins a **single** card (`GPU=0`) — on a
   shared machine, exporting more than one is a decision to make explicitly, not
   a default to inherit.
 

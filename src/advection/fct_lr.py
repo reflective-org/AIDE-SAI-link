@@ -247,7 +247,7 @@ def _lr_vert(rho, rhoq, dp, dt, w_face, bc_top=None, bc_bot=None):
 # DEFAULT ON. The fallback deliberately does not depend on which checkout you are
 # standing in: when it differed between copies, the same command meant different
 # physics per directory and was only right by accident when a launcher set the
-# variable explicitly (run_prod.sh does; nothing else has to).
+# variable explicitly (run_prod.py does; nothing else has to).
 # Why ON is the right default: `lr` is the DEFAULT ADV_SCHEME, so a default of OFF
 # silently reintroduced the spurious number source for any other launcher.
 # ADV_VPOS=0 IS NOT A SUPPORTED CONFIGURATION -- a forensic escape hatch only, kept
@@ -409,13 +409,19 @@ def _lr_loop(rho, rhoqb, u0, v0, w0, u1, v1, w1, dt_sub, n, lat, dp, polar,
     return jax.lax.fori_loop(0, n, body, (rho, rhoqb, vf0))
 
 
-def advect_hour_batch(qb0, u0, v0, w0, u1, v1, w1, lat, dp, qfrozb,
-                      lat_freeze=80.0, cfl=0.2, dt_total=3600.0,
+def advect_step_batch(qb0, u0, v0, w0, u1, v1, w1, lat, dp, qfrozb, dt_total,
+                      lat_freeze=80.0, cfl=0.2,
                       dtype=jnp.float64, rho0=None, polar_mode=None,
                       return_vflux=False, return_rho=False, rho_reset=True):
     """Advect a tracer stack in Lin-Rood flux form.
 
     qb0  : (ntracer,nlev,nlat,nlon) MIXING RATIOS
+    dt_total : length of the interval to advect across [s] -- the COUPLING
+           STEP (coupling.STEP_SEC), not an hour. u0/v0/w0 and u1/v1/w1 are
+           the CESM wind snapshots bracketing it, linearly interpolated at
+           each substep midpoint. Required on purpose: it used to default to
+           3600.0 from when the coupling step was 1 h, so a caller that
+           forgot it silently advected a sixth of the interval it asked for.
     rho0 : (nlev,nlat,nlon) air-mass factor carried in; None starts it at 1.
 
     rho_reset=True (default) remaps the air mass back onto the fixed pressure
