@@ -247,7 +247,7 @@ def _lr_vert(rho, rhoq, dp, dt, w_face, bc_top=None, bc_bot=None):
 # DEFAULT ON. The fallback deliberately does not depend on which checkout you are
 # standing in: when it differed between copies, the same command meant different
 # physics per directory and was only right by accident when a launcher set the
-# variable explicitly (run_prod.sh does; nothing else has to).
+# variable explicitly (run_prod.py does; nothing else has to).
 # Why ON is the right default: `lr` is the DEFAULT ADV_SCHEME, so a default of OFF
 # silently reintroduced the spurious number source for any other launcher.
 # ADV_VPOS=0 IS NOT A SUPPORTED CONFIGURATION -- a forensic escape hatch only, kept

@@ -313,9 +313,9 @@ INJ_LAT  = float(os.environ.get('INJ_LAT', '0.0'))
 _INJ_LON_DEFAULT = 180.0
 INJ_LON  = float(os.environ.get('INJ_LON', str(_INJ_LON_DEFAULT)))
 INJ_HPA  = float(os.environ.get('INJ_HPA', '55.0'))
-# Default 1 (zonal ring), matching run_prod.sh's production config -- until
+# Default 1 (zonal ring), matching run_prod.py's production config -- until
 # 2026-08-03 this defaulted to 0 (single cell), so a bare `python3 coupling.py`
-# and a bare `./run_prod.sh` injected at DIFFERENT geometries. run_prod.sh always
+# and a bare `./run_prod.py` injected at DIFFERENT geometries. run_prod.py always
 # exports this explicitly, so production itself was never affected; only the
 # standalone/dev path was.
 INJ_ZONAL = os.environ.get('INJ_ZONAL', '1') != '0'  # 1 = spread over the full lat ring
@@ -1768,7 +1768,7 @@ def main():
         # the default INJ_ZONAL=1 produces N identical runs under N different tags,
         # and nothing in the log distinguishes them (the location string prints
         # 'zonal ring' and omits the longitude entirely). Compared against the
-        # default rather than mere presence in os.environ, because run_prod.sh
+        # default rather than mere presence in os.environ, because run_prod.py
         # always exports INJ_LON to document its default -- presence would warn on
         # every ordinary run and get ignored.
         if INJ_MIRROR and j_mir == j_inj:

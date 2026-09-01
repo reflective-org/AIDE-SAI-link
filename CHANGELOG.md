@@ -18,6 +18,22 @@ Added
   gitignored, each with a tracked README.
 - `docs/REPO_LAYOUT.md` — the tree, and the rule for where a new file goes.
 - `docs/DEFERRED.md` — work deliberately not done, with reasons.
+- `src/run_prod.py` — the launcher, converted from `run_prod.sh`. Every one of
+  the 83 environment variables the model reads is now a documented `--flag`;
+  `--help` is the inventory and `--dry-run` prints the resolved environment with
+  the source of each value. Verified to hand `driver_fast.py` a byte-identical
+  environment to the shell version it replaces.
+- `FRAME_LEVELS` — `probe` (default, unchanged) or `all`, which adds a
+  zonal-mean frame at every band level (`(nf, NBINS, nlev, nlat)`, +1.1 GB/year)
+  beside the probe-level slabs. Without it the frames have a size axis but no
+  vertical axis, so a Hovmöller at any altitude but the probe level, and any
+  latitude–height animation, were not constructible from a run's own output.
+- `scripts/utils/plot_run.py --level HPA` and a fourth figure,
+  `<TAG>_zonal.png`; `scripts/utils/gif_run.py` gains `<TAG>_zonal_so4.gif` and
+  `<TAG>_zonal_dTrad.gif` when the run carries zonal frames.
+- `scripts/utils/run_summary.py` — parses a run log's `[prof]` lines into
+  `<TAG>_summary.md`, quarter by quarter so a cost trend is visible rather than
+  averaged away.
 
 Changed
 
@@ -51,6 +67,10 @@ Changed
 
 Removed
 
+- `src/run_prod.sh` — replaced by `src/run_prod.py`. It survived briefly as a
+  forwarding shim so that in-flight runs whose `run_chain.sh` called it by name
+  could still `RESUME`; those runs finished, their `run_chain.sh` now call the
+  Python launcher, and the shim is gone.
 - `rad_data/` at the repo root (moved to `inputs/rad_data/`).
 - `validation/`, `plot_run.py`, `gif_run.py` at the repo root (moved to `scripts/`).
 - `fast_advection/` (moved to `src/advection/`).

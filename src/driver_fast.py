@@ -21,7 +21,7 @@ Why a separate driver (not just an env flag):
     the resulting number are NOT directly comparable to the physical run. This is
     a first look at behaviour + speed of the fast engine, not an A/B match.
 
-Run: use run_prod.sh beside this file, which sets the whole production
+Run: use run_prod.py beside this file, which sets the whole production
 environment (GPU pin,
 libcuda path, memory policy) and execs this file. Direct invocation for a short
 test, once tomas-jax and jax-rrtmgp are importable -- `git submodule update
