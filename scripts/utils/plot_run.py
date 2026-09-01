@@ -759,6 +759,12 @@ for _src in (fr if FRAMES_OK else None, globals().get("_fin")):
         break
 
 
+def _fmtday(d):
+    """Day label. A sub-day run must not print 'day 0' -- a 12 h smoke test did
+    exactly that, which reads as 'the initial state' rather than 'half a day'."""
+    return f"{d:.2f}" if d < 2 else (f"{d:.1f}" if d < 10 else f"{d:.0f}")
+
+
 def _lognorm(a, lo_pct=1.0, hi_pct=99.9, max_decades=4.0):
     """Log norm clipped to a sane dynamic range.
 
@@ -792,7 +798,7 @@ else:
             ax.axhline(_inj.get("INJ_LAT", 0.0), color="w", lw=0.8, ls="--", alpha=0.7)
         ax.set_xlabel("day"); ax.set_ylabel("latitude [deg]")
         ax.set_yticks([-90, -60, -30, 0, 30, 60, 90]); ax.set_ylim(-90, 90)
-        ax.set_title(f"(a) {_hov_hpa:.1f} hPa, {_hov_days[-1]:.0f} days", fontsize=10)
+        ax.set_title(f"(a) {_hov_hpa:.1f} hPa, {_fmtday(_hov_days[-1])} days", fontsize=10)
         fig.colorbar(m, ax=ax, label="SO4 [x1e-9 kg/kg]", fraction=0.035, pad=0.01)
 
     if _zsec is not None:
@@ -811,8 +817,9 @@ else:
         if _inj:
             ax.plot(_inj.get("INJ_LAT", 0.0), _inj.get("INJ_HPA", 55.0), marker="v",
                     ms=7, mfc="#8f2d56", mec="w", mew=0.8, clip_on=False)
-        ax.set_title(f"(b) day {_sec_day:.0f}" if _sec_day is not None else "(b) final state"
-                     + ("   (v = injection)" if _inj else ""), fontsize=10)
+        _btitle = (f"(b) day {_fmtday(_sec_day)}" if _sec_day is not None
+                   else "(b) final state")
+        ax.set_title(_btitle + ("   (v = injection)" if _inj else ""), fontsize=10)
         # The outermost band levels are Dirichlet open-BC reservoirs pinned to CESM
         # MAM4 every step (N_BC_TOP / N_BC_BOT), NOT model aerosol -- the bright
         # band along the bottom of this panel is tropospheric MAM4 showing through
