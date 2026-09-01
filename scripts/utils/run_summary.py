@@ -14,12 +14,17 @@ figures quoted in run_prod.py's header cannot be confirmed against any run outpu
 that exists. The durable fix is for coupling.py to put stage timings in the
 timeseries npz; this script should then read that instead of scraping stdout.
 
-REPORTS A TREND, NOT JUST A MEAN. Microphysics cost scales with cell stiffness,
-so it grows as the injected burden builds -- over a 90-day or 1-year run the mean
-is not a description of any actual step. Advection and radiation do not behave
-that way (advection tracks nsub from the winds; radiation is fixed work per
-column). The quarter-by-quarter table is there to make that divergence visible
-rather than averaged away.
+REPORTS A TREND, NOT JUST A MEAN -- and the trend is how we learned the mean is
+safe. The expectation was that microphysics cost would climb as the injected
+burden builds (stiffer cells -> more adaptive substeps), making any run-mean
+meaningless. The 1-year run (runs/prod1yr/, 2026-08-28) measured the opposite:
+quarter means 35.8/34.1/35.5/34.2 s per step, no stage drifting >15%, over a 12.8x
+mass increase. So cost is FLAT and the mean is representative.
+
+Keep the trend table anyway. It is the check that establishes that, it is cheap,
+and it is what would catch the assumption breaking under a config nobody has run
+yet -- a different engine, resolution, or injection rate. Advection is the one
+stage that does move, and it tracks nsub from the winds, not the run's age.
 """
 import os
 import re
@@ -34,11 +39,16 @@ args = p.parse_args()
 
 if args.log:
     log = args.log
+elif args.tag and os.path.exists(f"{args.tag}.log"):
+    log = f"{args.tag}.log"                  # <TAG>.log is what the run chain writes
 else:
-    cands = sorted(glob.glob("*.log"))
+    # post.log is the chain's own post-processing log, never a run log -- it is
+    # present in every completed run directory, so leaving it in the candidate
+    # list made bare auto-detect fail exactly where it is most wanted.
+    cands = [c for c in sorted(glob.glob("*.log")) if c != "post.log"]
     if len(cands) != 1:
-        sys.exit(f"run_summary: expected exactly one *.log here, found {cands or 'none'}; "
-                 f"pass --log")
+        sys.exit(f"run_summary: cannot pick a run log here, found {cands or 'none'}; "
+                 f"pass --log or a TAG matching <TAG>.log")
     log = cands[0]
 text = open(log, errors="replace").read()
 
