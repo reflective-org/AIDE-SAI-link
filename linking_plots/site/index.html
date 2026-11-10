@@ -1,0 +1,567 @@
+<title>AIDE-SAI Linked System</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Public+Sans:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: single reading column (figures run wider), sticky section nav, one section per component of the linked system */
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --fg:#17202b; --muted:#5a6676; --rule:#d9dee5;
+  --accent:#2a78d6; --emu:#eb6834; --num:#2a78d6; --mam:#1baf7a; --pend-bg:#fdf3e7; --pend-fg:#7a4310;
+  --fig-bg:#ffffff;
+  --display:"Newsreader",Georgia,"Times New Roman",serif;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#11161d; --panel:#18202a; --fg:#e4e9ef; --muted:#9aa6b4; --rule:#2c3643;
+  --accent:#6fa8ee; --pend-bg:#33240f; --pend-fg:#f3c58d; --fig-bg:#f4f5f7; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161d; --panel:#18202a; --fg:#e4e9ef; --muted:#9aa6b4; --rule:#2c3643;
+  --accent:#6fa8ee; --pend-bg:#33240f; --pend-fg:#f3c58d; --fig-bg:#f4f5f7; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15.5px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 64px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+header h1{font-family:var(--display);font-weight:600;font-size:clamp(28px,4vw,40px);line-height:1.15;margin:0 0 8px;text-wrap:balance}
+.lede{max-width:72ch;color:var(--muted);margin:0}
+.config{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:14px;display:flex;flex-wrap:wrap;gap:6px 18px}
+nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--rule);margin:22px 0 8px;padding-block:10px;display:flex;flex-wrap:wrap;gap:6px 20px;font-size:14px}
+nav a{color:var(--fg);text-decoration:none;font-weight:600}
+nav a span{font-family:var(--mono);font-weight:400;color:var(--muted);font-size:12px;margin-left:6px}
+nav a:hover,nav a:focus-visible{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+section{padding-top:30px}
+h2{font-family:var(--display);font-weight:600;font-size:28px;margin:0 0 4px}
+h2 small{font-family:var(--body);font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-left:10px}
+h3{font-size:16px;margin:28px 0 6px}
+p{max-width:75ch}
+.sec-intro{color:var(--muted);margin:0 0 6px}
+figure{margin:14px 0 22px;display:flex;flex-direction:column;gap:8px}
+figure .img{background:var(--fig-bg);border:1px solid var(--rule);border-radius:6px;padding:6px;overflow-x:auto}
+figure img{display:block;width:100%;height:auto}
+figure.narrow .img{max-width:760px}
+figcaption{font-size:14px;color:var(--muted);max-width:90ch}
+figcaption b{color:var(--fg)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:4px 22px}
+.grid2>*{min-width:0}
+.pending{background:var(--pend-bg);color:var(--pend-fg);border-radius:6px;padding:12px 16px;margin:14px 0;font-size:14.5px;max-width:90ch}
+.pending b{font-weight:600}
+.note{border-left:3px solid var(--rule,#999);background:var(--panel,transparent);padding:10px 16px;margin:14px 0;font-size:14.5px;max-width:90ch}
+.note b{font-weight:600}
+.tbl{overflow-x:auto;margin:10px 0 18px}
+table{border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{padding:6px 14px 6px 0;text-align:right;border-bottom:1px solid var(--rule);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-weight:600;color:var(--muted);font-size:12.5px;letter-spacing:.03em}
+.k{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:baseline;margin-right:5px}
+.k.e{background:var(--emu)} .k.n{background:var(--num)} .k.m{background:var(--mam)}
+details{margin:18px 0;border-top:1px solid var(--rule);padding-top:10px}
+summary{cursor:pointer;font-weight:600}
+ul.tight{margin:6px 0 0;padding-left:20px;max-width:80ch} ul.tight li{margin:3px 0}
+code{font-family:var(--mono);font-size:.88em}
+footer{margin-top:40px;color:var(--muted);font-size:13px;border-top:1px solid var(--rule);padding-top:12px}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>AIDE-SAI linked system, 1997–1998</h1>
+  <p class="lede">Two model years (1997 and 1998) of stratospheric aerosol injection run through the full chain: emulated climate state, numerical advection, TOMAS microphysics (emulated and numerical) and radiation, without feedback onto the meteorology. Aerosol quantities count only levels above each column's own tropopause.</p>
+  <div class="config">
+    <span>10 Tg SO₂/yr · 30°N &amp; 30°S, 180°E, 55 hPa</span>
+    <span>JCM emulator met (P2@200)</span>
+    <span>SL advection, K=12</span>
+    <span>flux radiation, clear sky</span>
+    <span>2 × 1460 × 6 h steps</span>
+  </div>
+</header>
+
+<nav aria-label="Sections">
+  <a href="#climate">Climate state<span>emulated</span></a>
+  <a href="#advection">Advection<span>numerical</span></a>
+  <a href="#micro">Microphysics<span>TOMAS emu vs num</span></a>
+  <a href="#coupled">Coupled<span>no feedback</span></a>
+  <a href="#coupled-2yr">Coupled, 2 years<span>1997–1998</span></a>
+  <a href="#climate-seasons">DJF/JJA<span>2 years</span></a>
+  <a href="#aoa-10yr">Age of air<span>10 years</span></a>
+</nav>
+
+<section id="climate">
+  <h2>Climate state <small>emulated</small></h2>
+  <p class="sec-intro">The JCM atmospheric emulator's 1997 meteorology, as it drives the aerosol model (24 levels, 1.2–143 hPa).</p>
+
+  <h3>Zonal mean over the year</h3>
+  <figure>
+    <div class="img"><img src="img/climate_T_u_zonalmean_1997.gif" alt="Animated latitude-pressure zonal means of temperature and zonal wind over 1997" loading="lazy"></div>
+    <figcaption><b>Zonal-mean temperature and zonal wind, latitude by pressure, through 1997.</b> Mean over all longitudes; fixed colour limits across frames.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/climate_T_u_zonalmean_cesm_emu_diff_1997.gif" alt="Animated zonal-mean T and u: CESM, emulator and difference through 1997" loading="lazy"></div>
+    <figcaption><b>CESM (top), emulator (middle) and emulator minus CESM (bottom), zonal-mean T and u, every 3rd day of 1997.</b> Fixed colour limits; CESM and emulator rows share them. Difference limits ±25 K and ±50 m/s.</figcaption>
+  </figure>
+
+  <h3>Against ERA5</h3>
+  <p>ERA5 for 1997 from WeatherBench2's 37-pressure-level archive, sampled at the same daily 06 UTC times and interpolated to the model's 24 levels. Checked against ERA5 monthly means (T within 0.05–0.26 K RMS, u within 0.1–0.56 m/s).</p>
+  <div class="tbl"><table>
+    <thead><tr><th>annual-mean zonal mean, RMS vs ERA5</th><th>emulator</th><th>CESM</th></tr></thead>
+    <tbody>
+      <tr><td>T, 1.2–143 hPa (K)</td><td>5.1</td><td>2.0</td></tr>
+      <tr><td>T, 1–10 / 10–50 / 50–143 hPa (K)</td><td>6.3 / 4.0 / 4.7</td><td>2.4 / 1.8 / 1.5</td></tr>
+      <tr><td>u (m/s)</td><td>8.7</td><td>6.6</td></tr>
+      <tr><td>v (m/s)</td><td>0.29</td><td>0.21</td></tr>
+      <tr><td>tropical T at 103 hPa (K; ERA5 193.3)</td><td>200.9</td><td>193.6</td></tr>
+      <tr><td>SH jet peak, annual mean (m/s; ERA5 33)</td><td>36</td><td>48</td></tr>
+    </tbody>
+  </table></div>
+  <figure>
+    <div class="img"><img src="img/climate_T_u_zonalmean_era5_cesm_emu_1997.gif" alt="Animated zonal-mean T and u: ERA5, CESM, emulator and emulator minus ERA5" loading="lazy"></div>
+    <figcaption><b>ERA5, CESM, emulator and emulator minus ERA5, zonal-mean T and u, every 3rd day of 1997.</b> Fixed colour limits: T 183–289 K, u ±100 m/s, differences ±24 K and ±50 m/s. The vertical banding in ERA5 comes from interpolating between its 13 levels in this range.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/climate_annual_mean_era5_cesm_emu_4row.png" alt="Annual-mean zonal means: ERA5, CESM, emulator and emulator minus ERA5" loading="lazy"></div>
+    <figcaption><b>Annual means of T, u and v: ERA5, CESM, emulator, emulator minus ERA5.</b> The emulator's tropical cold point is ~7 K too warm and its top level up to ~15–20 K too warm; its equatorial easterlies at 10–100 hPa are ~20 m/s too strong.</figcaption>
+  </figure>
+  <h3>Against CESM</h3>
+  <figure>
+    <div class="img"><img src="img/climate_annual_mean_cesm_emu_diff_3row.png" alt="Annual-mean zonal means: CESM, emulator, and emulator minus CESM for T, u, v and omega" loading="lazy"></div>
+    <figcaption><b>Annual-mean zonal means of T, u, v and omega: CESM 1997 (top), emulator (middle), emulator minus CESM (bottom).</b> CESM and emulator rows share colour limits. Area-weighted RMS of the annual-mean zonal-mean difference: T 5.7 K, u 7.5 m/s. The emulator is warm above 5 hPa (up to ~17 K at the top) and ~7 K warm at the tropical tropopause (100 hPa equator: 200.2 K vs 193.4 K); its polar night jets are weaker (peak westerly 36 vs 48 m/s).</figcaption>
+  </figure>
+
+  <h3 id="climate-seasons">DJF and JJA, 1997–1998, down to 300 hPa</h3>
+  <p>Seasonal-mean zonal-mean T and u over both years (all Dec–Jan–Feb and all Jun–Jul–Aug days), 1–300 hPa. Five sources:</p>
+  <ul class="tight">
+    <li>the emulator;</li>
+    <li>two JCM dycore runs it was trained against: <b>hlcorpus</b> (P2's training data, ERA5 below 417 hPa, Held–Larichev drag) and <b>jcm_p20bt_c1</b> (the base training data, ERA5 and QBO nudged);</li>
+    <li>CESM2 (FWHIST fixed SST, daily means);</li>
+    <li>ERA5.</li>
+  </ul>
+  <p>The emulator, dycore runs and ERA5 are sampled at 06 UTC each day. Bottom rows: emulator minus each reference, cos-latitude weighted over 1–300 hPa.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>emulator minus …, RMS (mean)</th><th>hlcorpus</th><th>p20bt_c1</th><th>CESM</th><th>ERA5</th></tr></thead>
+    <tbody>
+      <tr><td>T, DJF (K)</td><td>1.58 (−0.01)</td><td>1.49 (−0.05)</td><td>6.35 (+2.55)</td><td>6.19 (+1.51)</td></tr>
+      <tr><td>T, JJA (K)</td><td>2.70 (+0.03)</td><td>1.97 (−0.07)</td><td>7.08 (+3.68)</td><td>6.46 (+2.42)</td></tr>
+      <tr><td>u, DJF (m/s)</td><td>6.59 (+0.50)</td><td>6.09 (−0.11)</td><td>9.63 (−3.37)</td><td>10.51 (−2.04)</td></tr>
+      <tr><td>u, JJA (m/s)</td><td>8.21 (+1.06)</td><td>8.65 (+0.80)</td><td>10.65 (−3.07)</td><td>10.27 (−3.24)</td></tr>
+    </tbody>
+  </table></div>
+  <p>The emulator tracks the JCM dycore it learned from: within 1.5–2.7 K and 6–9 m/s, with no mean bias. Most of its distance from CESM and ERA5 is already present in the dycore runs themselves, so it comes from the dycore's climate, not from emulation:</p>
+  <ul class="tight">
+    <li>a warm tropical tropopause and upper stratosphere;</li>
+    <li>subtropical jets near 200 hPa that are present but much weaker than in CESM and ERA5 (about half the ERA5 peak near 30°N in DJF) in all three JCM-based fields;</li>
+    <li>an equatorial upper-stratospheric westerly the references don't have.</li>
+  </ul>
+  <div class="grid2">
+    <figure><div class="img"><img src="img/climate2yr_T_DJF.png" alt="DJF zonal-mean temperature, five sources and differences" loading="lazy"></div><figcaption><b>T, DJF.</b></figcaption></figure>
+    <figure><div class="img"><img src="img/climate2yr_T_JJA.png" alt="JJA zonal-mean temperature, five sources and differences" loading="lazy"></div><figcaption><b>T, JJA.</b></figcaption></figure>
+    <figure><div class="img"><img src="img/climate2yr_u_DJF.png" alt="DJF zonal-mean zonal wind, five sources and differences" loading="lazy"></div><figcaption><b>u, DJF.</b></figcaption></figure>
+    <figure><div class="img"><img src="img/climate2yr_u_JJA.png" alt="JJA zonal-mean zonal wind, five sources and differences" loading="lazy"></div><figcaption><b>u, JJA.</b></figcaption></figure>
+  </div>
+
+  <h3>Age of air</h3>
+  <p>An age tracer in a transport-only run with the campaign's advection and no chemistry. Age is reset to zero on the 143 hPa level between 10°S and 10°N and grows by the time step everywhere else. The 1997 meteorology is cycled for 12 years, once on the emulator winds and once on CESM 1997 winds as a control.</p>
+  <div class="note"><b>The campaign's mass fixer was switched off for this tracer.</b> The global fixer (<code>ADV_SL_FIXER=global</code>) rescales each whole level every step. That's fine for a mass tracer, but for a clock tracer the error grows with elapsed time. Through the campaign operator, age rose until about year 8 and then fell (3.5 → 2.0 yr at 10 hPa, equator), which is impossible under a repeating circulation. In a 30-day test with the fixer on, 85–92 % of cells were older than the elapsed time; with it off, about 1 %, all next to the source. Everything else matches the campaign transport.</div>
+  <figure>
+    <div class="img"><img src="img/aoa_final_year_annual_mean.png" alt="Year-12 annual-mean zonal-mean age of air and year-on-year drift" loading="lazy"></div>
+    <figcaption><b>Age of air on the emulator winds, year-12 annual-mean zonal mean (left), and drift from year 11 (right).</b> Close to equilibrium: 94 % of the domain (mass-weighted) drifts under 1 %/yr, and the domain mean (2.58 yr) rises 0.021 yr/yr. Ages are "time since 143 hPa in the tropics", not since the tropopause.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/aoa_emu_vs_cesm_winds.png" alt="Year-12 age of air on emulator winds against CESM winds, and their difference" loading="lazy"></div>
+    <figcaption><b>Emulator winds against CESM 1997 winds, year 12, same transport.</b> Air on the emulator winds is 0.5–1.5 yr older, most of all in the tropical lower stratosphere. That points to weaker tropical upwelling, consistent with the emulator's ~7 K warm tropical tropopause.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Year-12 age (yr)</th><th>Emulator winds</th><th>CESM winds</th></tr></thead>
+    <tbody>
+      <tr><td>51.7 hPa, equator</td><td>2.57</td><td>1.04</td></tr>
+      <tr><td>10.7 hPa, equator</td><td>3.89</td><td>2.90</td></tr>
+      <tr><td>10.7 hPa, 60°N</td><td>4.61</td><td>3.97</td></tr>
+      <tr><td>10.7 hPa, 60°S</td><td>5.05</td><td>4.16</td></tr>
+      <tr><td>2.1 hPa, equator</td><td>4.67</td><td>3.78</td></tr>
+      <tr><td>Domain mass-weighted mean</td><td>2.58</td><td>1.74</td></tr>
+    </tbody>
+  </table></div>
+  <div class="grid2">
+    <figure>
+      <div class="img"><img src="img/aoa_spinup_timeseries.png" alt="Age of air spin-up at reference points over 12 years" loading="lazy"></div>
+      <figcaption><b>Spin-up at reference points</b>, with elapsed time as the upper bound.</figcaption>
+    </figure>
+    <figure>
+      <div class="img"><img src="img/aoa_evolution_final.gif" alt="Animated age-of-air evolution over the 12-year spin-up" loading="lazy"></div>
+      <figcaption><b>Zonal-mean age every 30 days over the 12-year spin-up</b>, fixed colour scale.</figcaption>
+    </figure>
+  </div>
+  <details>
+    <summary>Diagnostic: the fixer artifact</summary>
+    <figure>
+      <div class="img"><img src="img/aoa_clock_tracer_artifact.png" alt="Clock tracer through the campaign operator against the fixer-off age tracer" loading="lazy"></div>
+      <figcaption><b>Clock tracer through the campaign operator with the global fixer (solid, 22 years) against the fixer-off age tracer (dashed).</b> The fixer-on age peaks around year 8 and then falls.</figcaption>
+    </figure>
+  </details>
+
+  <h3 id="aoa-10yr">Age of air, 10 years of 1997–1998 winds: surface reset vs 150 hPa reset</h3>
+  <p>Same tracer setup (fixer off), now cycling the two emulator years 1997–1998 five times (10 model years) on the full column: the 24 aerosol-model levels plus 21 fixed levels from 160 to 1000 hPa, with the wind set to zero below the local surface. Two clocks run side by side:</p>
+  <ul class="tight">
+    <li><b>Surface reset:</b> age = 0 at the ground.</li>
+    <li><b>150 hPa reset:</b> age = 0 everywhere at p ≥ 150 hPa.</li>
+    <li>The published 143 hPa tropical-band setup was rerun on the same two-year winds for reference (<b>band</b>).</li>
+  </ul>
+  <p>Figures use the mean of the last 1997–1998 cycle. Drift over the last cycle, 100–5 hPa mean: surface +0.043, 150 hPa +0.015, band +0.056 yr/yr. That is close to equilibrium; the remaining rise is small next to the differences below.</p>
+  <p><b>References:</b></p>
+  <ul class="tight">
+    <li><b>CLaMS driven by ERA5</b>, a surface clock, as a 2000–2014 climatology (the closest product available to 1997–98).</li>
+    <li><b>The CESM age of air</b> from WACCM6 REF-D1, 1997–1998. It is an entry age based at 103 hPa, so it is compared with the entry-type clocks. CLaMS minus its tropical 150 hPa age (0.088 yr) is shown as well.</li>
+  </ul>
+  <p>Scores are cos-latitude weighted over 100–5 hPa, |lat| ≤ 80°.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>emulator clock minus reference (yr)</th><th>RMS</th><th>mean</th></tr></thead>
+    <tbody>
+      <tr><td>surface reset − CLaMS-ERA5</td><td>0.63</td><td>−0.34</td></tr>
+      <tr><td>150 hPa reset − WACCM6</td><td>0.89</td><td>−0.77</td></tr>
+      <tr><td>150 hPa reset − (CLaMS − 0.088)</td><td>1.34</td><td>−1.24</td></tr>
+      <tr><td>band (143 hPa, 10°S–10°N) − WACCM6</td><td>0.54</td><td>+0.01</td></tr>
+      <tr><td>band − (CLaMS − 0.088)</td><td>0.74</td><td>−0.46</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>10°S–10°N age (yr)</th><th>~50 hPa</th><th>~20 hPa</th><th>~10 hPa</th></tr></thead>
+    <tbody>
+      <tr><td>emulator, surface reset</td><td>2.02</td><td>2.74</td><td>3.20</td></tr>
+      <tr><td>emulator, 150 hPa reset</td><td>1.09</td><td>1.79</td><td>2.25</td></tr>
+      <tr><td>emulator, band</td><td>1.71</td><td>2.44</td><td>2.91</td></tr>
+      <tr><td>CLaMS-ERA5 2000–2014</td><td>1.94</td><td>3.06</td><td>3.70</td></tr>
+      <tr><td>WACCM6 1997–98</td><td>1.08</td><td>2.49</td><td>3.06</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li><b>The surface-reset age is about 0.93–0.95 yr older than the 150 hPa age throughout the tropical stratosphere.</b> That is the time air takes on these winds to get from the ground to 150 hPa. It is far too long: CLaMS has under 0.1 yr at the tropical 150 hPa. The emulator meteorology has resolved winds only, with no convective mass flux, so surface air reaches the upper troposphere by slow large-scale ascent.</li>
+    <li><b>Its good overall score against CLaMS (RMS 0.63 yr) is partly compensation.</b> It is up to ~1 yr too old at 70–120 hPa in the tropics and subtropics, and about 1 yr too young at 30–100 hPa in midlatitudes.</li>
+    <li><b>Above the entry level the circulation is too fast or too weakly mixed:</b> the 150 hPa age is 0.8–1.2 yr younger than WACCM6 and shifted CLaMS. The band clock looks closer (mean bias +0.01 yr against WACCM6) only because it is reset in the tropics alone, so extratropical air entering below 143 hPa starts old.</li>
+  </ul>
+  <figure>
+    <div class="img"><img src="img/aoa2yr_surface_vs_150.png" alt="Surface-reset and 150 hPa-reset age of air on emulator winds, and their difference" loading="lazy"></div>
+    <figcaption><b>Surface-reset age, 150 hPa-reset age, and their difference (surface-to-150 hPa transit time),</b> 1–1000 hPa.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/aoa2yr_sfc_vs_clams.png" alt="Surface-reset age against CLaMS-ERA5" loading="lazy"></div>
+    <figcaption><b>Surface-reset age against CLaMS-ERA5 (both surface clocks, no offset).</b></figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/aoa2yr_entry_vs_refs.png" alt="Entry-type ages against WACCM6 and shifted CLaMS" loading="lazy"></div>
+    <figcaption><b>Entry-type ages: 150 hPa reset and band, against WACCM6 (CESM) and CLaMS minus 0.088 yr.</b> White: WACCM6 negative ages masked; below the band domain.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/aoa2yr_profiles.png" alt="Tropical profiles, latitude cross-sections and spin-up of age of air" loading="lazy"></div>
+    <figcaption><b>Tropical profile, latitude cross-sections near 55 and 12 hPa, and the 10-year spin-up at 20 hPa.</b> The spin-up oscillates with the seasonal cycle and the 2-year forcing cycle.</figcaption>
+  </figure>
+
+  <h3>Tracer transport</h3>
+  <p>A passive tracer released continuously at the two injection cells (10 Tg/yr total, 51.7 hPa, 29.7°N/S, 180°E) for one year on the emulator winds, with the campaign transport including its mass fixer. There is no removal except leaving the domain through its top or bottom.</p>
+  <figure>
+    <div class="img"><img src="img/inj_column_map_final.gif" alt="Animated column tracer mass over one year" loading="lazy"></div>
+    <figcaption><b>Column-summed tracer mass (Σ mixing ratio × dp/g, kg/m²) through 1997.</b> Log colour scale. By day 365, 81 % of the 10 Tg released is still in the domain. For transport of the actual sulfate in the coupled runs, see <a href="#coupled-transport">the coupled section</a>.</figcaption>
+  </figure>
+</section>
+
+<section id="advection">
+  <h2>Advection <small>numerical</small></h2>
+  <p class="sec-intro">Semi-Lagrangian split operator (<code>ADV_SCHEME=sl</code>, K=12), the scheme used in every campaign run.</p>
+  <figure>
+    <div class="img"><img src="img/inj_zonal_mean_final.gif" alt="Animated zonal-mean tracer mixing ratio over one year" loading="lazy"></div>
+    <figcaption><b>One year of advection: zonal-mean mixing ratio of the passive injection tracer, ppbm.</b> Driven by the emulator's winds (JCM emulator P2@200) with the SL scheme. Log colour scale fixed at 0.1–1000 ppbm for every frame. The model's aerosol domain ends at 143 hPa, so there is no tracer below it.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/inj_panels_d30_90_180_365.png" alt="Tracer column maps and zonal means at days 30, 90, 180 and 365" loading="lazy"></div>
+    <figcaption><b>Days 30, 90, 180 and 365:</b> column mass (left) and zonal-mean mixing ratio (right). The share of tracer poleward of 45° rises from 7 % at day 30 to about 30 % by day 90 and stays there.</figcaption>
+  </figure>
+  <figure class="narrow">
+    <div class="img"><img src="img/inj_budget.png" alt="Injected tracer mass budget over the year, emulator and CESM winds" loading="lazy"></div>
+    <figcaption><b>Mass budget:</b> released against still in the domain, on emulator winds and on CESM 1997 winds. The emulator winds export about 9 % less over the year.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>Day</th><th>Released (Tg)</th><th>In domain, emulator winds</th><th>In domain, CESM winds</th></tr></thead>
+    <tbody>
+      <tr><td>30</td><td>0.82</td><td>0.82 (99.8 %)</td><td>–</td></tr>
+      <tr><td>90</td><td>2.47</td><td>2.42 (98.3 %)</td><td>2.37</td></tr>
+      <tr><td>180</td><td>4.93</td><td>4.67 (94.7 %)</td><td>4.39</td></tr>
+      <tr><td>365</td><td>10.0</td><td>8.14 (81.4 %)</td><td>7.44</td></tr>
+    </tbody>
+  </table></div>
+  <figure>
+    <div class="img"><img src="img/inj_cesm_winds_d365.png" alt="Injection tracer at day 365 on CESM 1997 winds" loading="lazy"></div>
+    <figcaption><b>The same tracer on CESM 1997 winds at day 365</b>, for comparison with the day-365 emulator panel above.</figcaption>
+  </figure>
+</section>
+
+<section id="micro">
+  <h2>Microphysics <small>TOMAS emulated vs numerical</small></h2>
+  <p class="sec-intro">10,000 grid cells, each run as a closed box for 24 h (4 × 6 h) under TOMAS numerical and the TOMAS emulator: 5,000 background cells from the control run and 5,000 SAI cells from inside the plume, sampled at 40 times across the year. Each cell keeps its own temperature, humidity and pressure; OH follows the day–night cycle. CARMA and MAM4 are left out here.</p>
+  <p>The emulator is run exactly as deployed in the linked model: physics routing for the stiffest cells, the one-year-spec knobs, quiet-cell triage and the chemistry closure. Routing ranks cells over the whole grid, so the emulator runs on every cell of each sampled frame and the sampled cells are then compared.</p>
+  <h3>Total number and total mass per cell</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>|relative error| at 24 h, median / p90</th><th>deployed</th><th>bare network</th><th>assume no change</th></tr></thead>
+    <tbody>
+      <tr><td>total number, background</td><td>0.28 % / 1.1 %</td><td>0.51 % / 1.5 %</td><td>0.53 % / 2.3 %</td></tr>
+      <tr><td>total number, SAI plume</td><td>0.35 % / 5.9 %</td><td>1.5 % / 22 %</td><td>2.0 % / 20 %</td></tr>
+      <tr><td>total mass, both</td><td>≈0 % / ≤0.011 %</td><td>—</td><td>—</td></tr>
+      <tr><td>number per bin, background</td><td>0.18 % / 3.9 %</td><td>0.87 % / 4.3 %</td><td>0.44 % / 8.6 %</td></tr>
+      <tr><td>number per bin, SAI plume</td><td>0.25 % / 6.4 %</td><td>1.3 % / 16 %</td><td>1.1 % / 25 %</td></tr>
+      <tr><td>mass per bin, background</td><td>0.14 % / 2.6 %</td><td>1.3 % / 6.1 %</td><td>0.10 % / 2.4 %</td></tr>
+      <tr><td>mass per bin, SAI plume</td><td>0.14 % / 1.5 %</td><td>1.15 % / 5.4 %</td><td>0.33 % / 2.4 %</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li><b>Where cells go, per 6 h call:</b> background 11.6 % physics, 34 % quiet shortcut, 54 % network; SAI plume about 28 % physics, 20 % quiet, 51 % network.</li>
+    <li><b>Physics-routed cells</b> reproduce the numerical answer by construction. <b>Quiet-shortcut cells</b> hold number fixed, so their error equals the no-change error. <b>Network-only cells</b> carry the rest: SAI total number 1.05 % / 12 %.</li>
+    <li><b>SAI cells with total-number error above 10 %:</b> 314 of 5,000 deployed, against 1,011 for the bare network. 71 % of the remaining ones never went to physics.</li>
+    <li><b>Total mass</b> is held by the chemistry closure, so its near-zero error reflects the closure, not the network; without it, the network's own median total-mass error is 0.6–0.9 %.</li>
+    <li><b>Remaining error</b> sits in the nucleation bins below 5 nm (median 12–14 % in the smallest bin).</li>
+  </ul>
+  <figure>
+    <div class="img"><img src="img/micro_routed_fig3_totals_vs_time.png" alt="Total number and mass error per cell at 6, 12, 18 and 24 h" loading="lazy"></div>
+    <figcaption><b>Total number (top) and total mass (bottom) error per cell at 6, 12, 18 and 24 h,</b> background left, SAI right. Boxes 25–75 %, whiskers 5–95 %. Dotted gray: the numerical model's own change over the same time (the error of assuming nothing changes).</figcaption>
+  </figure>
+
+  <h3>Per bin</h3>
+  <figure>
+    <div class="img"><img src="img/micro_routed_fig1_perbin_relerr.png" alt="Box plots of per-bin relative error, deployed emulator" loading="lazy"></div>
+    <figcaption><b>Per-bin relative error in number (top) and mass (bottom) at 24 h.</b> Bins below 10⁻³ of the cell's largest bin are left out.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/micro_routed_fig2_mean_distribution.png" alt="Mean number and mass per bin, numerical vs deployed emulator" loading="lazy"></div>
+    <figcaption><b>Number and mass per bin at 24 h,</b> <span class="k n"></span>numerical and <span class="k e"></span>emulator; mean (solid) and median (dotted), with the starting distribution dashed.</figcaption>
+  </figure>
+
+  <details>
+    <summary>Supplement: bare network, routing off</summary>
+    <p>Every cell through the network, no physics fallback. Median / p90 |relative error| at 24 h:</p>
+    <div class="tbl"><table>
+      <thead><tr><th></th><th>background</th><th>SAI plume</th></tr></thead>
+      <tbody>
+        <tr><td>total number</td><td>0.5 % / 1.5 %</td><td>1.5 % / 22 %</td></tr>
+        <tr><td>number, per bin</td><td>0.9 % / 4.3 %</td><td>1.3 % / 16 %</td></tr>
+        <tr><td>mass, per bin</td><td>1.3 % / 6.1 %</td><td>1.2 % / 5.4 %</td></tr>
+      </tbody>
+    </table></div>
+    <figure>
+      <div class="img"><img src="img/micro_bare_fig1_perbin_relerr.png" alt="Bare network: box plots of per-bin relative error" loading="lazy"></div>
+      <figcaption><b>Per-bin relative error, emulator vs numerical, 24 h.</b> Boxes 25–75 %, whiskers 5–95 %. Dotted gray: median numerical 24 h change (the error of assuming nothing changes).</figcaption>
+    </figure>
+    <figure>
+      <div class="img"><img src="img/micro_bare_fig2_mean_distribution.png" alt="Bare network: mean number and mass distributions" loading="lazy"></div>
+      <figcaption><b>Number and mass per bin at 24 h,</b> <span class="k n"></span>numerical and <span class="k e"></span>emulator.</figcaption>
+    </figure>
+    <figure>
+      <div class="img"><img src="img/micro_bare_fig3_totals_vs_time.png" alt="Bare network: total number and mass error vs time" loading="lazy"></div>
+      <figcaption><b>Total number and mass error at 6, 12, 18 and 24 h.</b></figcaption>
+    </figure>
+  </details>
+</section>
+
+<section id="coupled">
+  <h2>Coupled system <small>no feedback</small></h2>
+  <section id="coupled-2yr" style="padding-top:6px">
+  <h3 style="margin-top:10px">Two years, 1997–1998</h3>
+  <p>All six runs continued through 1998 from their end-of-1997 state on the emulator's 1998 meteorology. Everything below this subsection is the original one-year (1997) analysis, kept for reference. Here "2-year mean" is over all 730 days and "last 30 days" is December 1998.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>global mean</th><th>emulator</th><th>numerical</th><th>MAM4</th></tr></thead>
+    <tbody>
+      <tr><td>net TOA forcing, 2-year mean (W/m²)</td><td>−2.612</td><td>−2.651</td><td>−2.090</td></tr>
+      <tr><td>net TOA forcing, last 30 days</td><td>−3.216</td><td>−3.296</td><td>−2.448</td></tr>
+      <tr><td>SW / LW, last 30 days</td><td>−4.19 / +0.975</td><td>−4.31 / +1.010</td><td>−3.30 / +0.853</td></tr>
+      <tr><td>added AOD 550 nm, 2-year mean</td><td>0.085</td><td>0.086</td><td>0.062</td></tr>
+      <tr><td>added AOD 550 nm, last 30 days</td><td>0.112</td><td>0.114</td><td>0.079</td></tr>
+      <tr><td>net aerosol heating, last 30 days (mK/day)</td><td>34.0</td><td>35.3</td><td>30.5</td></tr>
+      <tr><td>added column SO₄, last 30 days (mg/m²)</td><td>19.11</td><td>18.77</td><td>15.17</td></tr>
+      <tr><td>added particles, last 30 days (10¹⁰/m²)</td><td>2021</td><td>2056</td><td>242</td></tr>
+      <tr><td>mass-weighted diameter, last 30 days (nm)</td><td>596</td><td>623</td><td>661</td></tr>
+      <tr><td>wet effective diameter, last 30 days (nm)</td><td>729</td><td>757</td><td>704</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li><b>The emulator stays close to numerical through the second year.</b> Net forcing is 1.5 % weaker over two years and 2.4 % weaker in December 1998, against 0.8 % and 1.5 % after one year. It carries 1.8 % <i>more</i> sulfate in December 1998, but in particles 4 % smaller (mass-weighted), so it scatters and absorbs slightly less.</li>
+    <li><b>MAM4 levels off while TOMAS keeps growing.</b> MAM4's December column sulfate is the same in both years (15.27 → 15.17 mg/m²), while TOMAS numerical grows from 17.02 to 18.77. MAM4's net forcing is 21 % weaker than numerical over two years and 26 % weaker in December 1998, against 15 % and 19 % after one year.</li>
+    <li><b>Forcing peaks in mid-1998 (around day 560–600) and then weakens.</b> Global-mean AOD and longwave forcing peak near July 1998 and fall by December. By latitude band (AOD animation, lower right), the 90°S–20°S band peaks near July 1998 and declines after, while 20°N–90°N peaks near October; the cause is not diagnosed here.</li>
+    <li>Peak zonal-mean heating (2-year mean) is 0.159 / 0.160 / 0.147 K/day (emulator / numerical / MAM4).</li>
+  </ul>
+  <figure>
+    <div class="img"><img src="img/y2_fig6_aod550_map_timeseries.gif" alt="Animated AOD maps with animated global and latitude-band time series, 1997-1998" loading="lazy"></div>
+    <figcaption><b>Added stratospheric AOD at 550 nm, every 4th day of 1997–1998.</b> Left: TOMAS numerical, emulator − numerical and MAM4 − numerical (each difference on its own fixed scale). Right: global mean (top) and three latitude bands (bottom) building up in step with the maps; faint lines show the full two years.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/y2_fig5_b_column_sulfate_num_diffs.gif" alt="Animated column sulfate: numerical, emulator minus numerical, MAM4 minus numerical, 1997-1998" loading="lazy"></div>
+    <figcaption><b>Added stratospheric column sulfate, every 4th day of 1997–1998:</b> TOMAS numerical, then emulator − numerical and MAM4 − numerical. Each panel has its own colour scale, fixed over time (99.5th percentile of the last 60 days).</figcaption>
+  </figure>
+  <figure class="narrow">
+    <div class="img"><img src="img/y2_fig0_tropopause.png" alt="Two-year mean tropopause pressure map and zonal profile with fraction excluded" loading="lazy"></div>
+    <figcaption><b>Stratosphere filter, 2-year mean.</b> Right panel, two x axes: zonal-mean tropopause pressure on the bottom (purple, log scale), share of band cells excluded as tropospheric on the top (black). 2.51 % of band cells are excluded (3.50 % area-weighted), most at 20–40° where the tropopause is highest.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/y2_fig2_forcing_timeseries.png" alt="Global-mean SW, LW and net forcing through 1997-1998" loading="lazy"></div>
+    <figcaption><b>Global-mean shortwave, longwave and net forcing through both years,</b> with the difference from TOMAS numerical in % (bottom).</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/y2_fig3_d_heating_timeseries.png" alt="Global-mean aerosol heating rate through 1997-1998" loading="lazy"></div>
+    <figcaption><b>Global-mean aerosol heating rate through both years, mK/day,</b> shortwave, longwave, net, and each scheme minus TOMAS numerical. MAM4's net heating falls behind TOMAS through 1998 (−5 mK/day by year end), almost all longwave.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/y2_fig3_e_heating_lat_season.png" alt="Heating rate by latitude and day, 1997-1998" loading="lazy"></div>
+    <figcaption><b>Aerosol heating rate by latitude and day over both years.</b></figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/y2_fig5_column_sulfate_transport.gif" alt="Animated added column sulfate, three schemes, 1997-1998" loading="lazy"></div>
+    <figcaption><b>Added column sulfate for all three schemes on one scale, every 4th day of 1997–1998.</b></figcaption>
+  </figure>
+  <details>
+    <summary>More two-year figures: forcing maps, heating cross-section, size</summary>
+    <figure><div class="img"><img src="img/y2_fig1_a_forcing_maps_ann.png" alt="2-year mean forcing maps" loading="lazy"></div><figcaption><b>Forcing maps, 2-year mean</b> (SW from the 16-sun-position re-solves on every 5th day).</figcaption></figure>
+    <figure><div class="img"><img src="img/y2_fig1_b_forcing_maps_l30.png" alt="Forcing maps December 1998" loading="lazy"></div><figcaption><b>Forcing maps, last 30 days</b> (6 re-solved days).</figcaption></figure>
+    <figure><div class="img"><img src="img/y2_fig3_a_heating_latp_annual.png" alt="2-year mean zonal-mean heating" loading="lazy"></div><figcaption><b>Zonal-mean heating rate, 2-year mean.</b></figcaption></figure>
+    <figure><div class="img"><img src="img/y2_fig4_b2_size_maps_l30.png" alt="Size maps December 1998" loading="lazy"></div><figcaption><b>Mass-weighted and effective diameters, last 30 days.</b></figcaption></figure>
+    <figure><div class="img"><img src="img/y2_fig4_f_wet_size_distribution.png" alt="Wet size distribution, 2 years" loading="lazy"></div><figcaption><b>Global-mean wet size distributions:</b> 2-year mean, last 30 days and SAI increment.</figcaption></figure>
+  </details>
+  </section>
+  <h3>One year, 1997</h3>
+  <p class="sec-intro">Full year, three injection/control pairs on the same emulated meteorology: <span class="k e"></span>TOMAS emulator, <span class="k n"></span>TOMAS numerical and <span class="k m"></span>MAM4. Map panels read emulator | numerical | MAM4 on one colour scale, then emulator − numerical | MAM4 − numerical, with TOMAS numerical as the reference. Forcing is clear sky; aerosol quantities use stratospheric levels only.</p>
+
+  <div class="tbl"><table>
+    <thead><tr><th>global mean</th><th>emulator</th><th>numerical</th><th>MAM4</th></tr></thead>
+    <tbody>
+      <tr><td>net TOA forcing, annual (W/m²)</td><td>−1.742</td><td>−1.756</td><td>−1.488</td></tr>
+      <tr><td>net TOA forcing, last 30 days</td><td>−2.957</td><td>−3.003</td><td>−2.421</td></tr>
+      <tr><td>SW / LW, last 30 days</td><td>−3.80 / +0.840</td><td>−3.86 / +0.855</td><td>−3.23 / +0.805</td></tr>
+      <tr><td>added AOD 550 nm, last 30 days</td><td>0.104</td><td>0.105</td><td>0.076</td></tr>
+      <tr><td>net aerosol heating, last 30 days (mK/day)</td><td>27.5</td><td>28.0</td><td>27.7</td></tr>
+      <tr><td>added column SO₄, last 30 days (mg/m²)</td><td>17.06</td><td>17.02</td><td>15.27</td></tr>
+      <tr><td>added particles, last 30 days (10¹⁰/m²)</td><td>2116</td><td>2154</td><td>301</td></tr>
+      <tr><td>mass-weighted diameter, last 30 days (nm)</td><td>548</td><td>568</td><td>645</td></tr>
+      <tr><td>wet effective diameter, last 30 days (nm)</td><td>662</td><td>679</td><td>668</td></tr>
+    </tbody>
+  </table></div>
+  <p>The emulator stays within 2 % of numerical on forcing and heating. MAM4 carries 10 % less sulfate, in one-seventh as many and larger particles, and its forcing is 15 % weaker over the year (19 % by year end), almost all of it in the shortwave. Its longwave and its net heating are close to TOMAS.</p>
+
+  <h3>Stratosphere filter</h3>
+  <figure class="narrow">
+    <div class="img"><img src="img/v2_fig0_tropopause.png" alt="Annual-mean tropopause pressure and fraction of cells excluded" loading="lazy"></div>
+    <figcaption><b>WMO lapse-rate tropopause from the emulator temperature, recomputed every frame.</b> 2.5 % of model cells fall below it and are excluded (3.5 % area-weighted). Median tropopause 134 hPa in the tropics, ~370–390 hPa poleward of 60°.</figcaption>
+  </figure>
+
+  <h3>Radiative forcing at TOA</h3>
+  <figure>
+    <div class="img"><img src="img/v2_fig2_forcing_timeseries.png" alt="Global-mean SW, LW and net forcing through the year for all three schemes" loading="lazy"></div>
+    <figcaption><b>Global-mean shortwave, longwave and net forcing, W/m².</b> Thin lines daily, thick 30-day running mean; bottom panel: difference from TOMAS numerical in %.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/v2_fig1_a_forcing_maps_ann.png" alt="Annual-mean forcing maps, net, SW and LW, three schemes" loading="lazy"></div>
+    <figcaption><b>Forcing per grid cell, W/m², annual mean.</b> Negative is cooling. Shortwave is a true daily mean: the model's own radiation was re-run offline on the saved states at 16 sun positions a day (every 1.5 h) on every 5th day, after checking that a re-run at the original time reproduces the saved fluxes to float32 rounding. This removes the arcs from the fixed 6-hourly output times. Longwave comes straight from the saved frames.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/v2_fig1_b_forcing_maps_l30.png" alt="Last-30-day forcing maps, three schemes" loading="lazy"></div>
+    <figcaption><b>Same, last 30 days.</b> Built from only 6 re-solved days, so noisier than the annual mean.</figcaption>
+  </figure>
+  <details>
+    <summary>How the shortwave correction compares with the raw and earlier estimates</summary>
+    <figure>
+      <div class="img"><img src="img/v2_fig1_d_sw_method_comparison.png" alt="Comparison of SW forcing methods" loading="lazy"></div>
+      <figcaption>Global means barely move (raw vs diurnal: 0.02 % annual), but locally the raw maps were off by up to 0.72 W/m² (99th percentile) and the earlier albedo-scaling estimate by 0.42 W/m².</figcaption>
+    </figure>
+    <figure>
+      <div class="img"><img src="img/v2_fig1_c_forcing_sw_raw_annual.png" alt="Raw annual-mean SW forcing showing daylight lobes" loading="lazy"></div>
+      <figcaption>Plain mean of the saved frames, showing the daylight lobes from the fixed-UTC sampling.</figcaption>
+    </figure>
+  </details>
+
+  <h3>ΔT: stratospheric aerosol heating</h3>
+  <p>With no feedback the temperature never responds, so ΔT is shown as the extra heating rate the aerosol causes: injection minus control.</p>
+  <figure>
+    <div class="img"><img src="img/fig3_d_heating_timeseries.png" alt="Global-mean stratospheric aerosol heating rate through the year: shortwave, longwave, net, and differences" loading="lazy"></div>
+    <figcaption><b>Global-mean aerosol heating rate through the year, mK/day:</b> shortwave, longwave and net, then each scheme minus TOMAS numerical. Mass-weighted mean over stratospheric cells (cos latitude × layer thickness). Thin lines daily, thick lines centred 30-day running mean. Longwave absorption dominates: net heating reaches ~28 mK/day by year end in all three. The emulator falls behind from about day 135, to −2 % (−0.55 mK/day) over the last 30 days, almost all longwave. MAM4 has less longwave heating but almost no negative shortwave term, so its net ends close to TOMAS.</figcaption>
+  </figure>
+
+  <h3>Heating by latitude and season</h3>
+  <figure>
+    <div class="img"><img src="img/fig3_e_heating_lat_season.png" alt="Latitude by day-of-year heating rate for three schemes, SW, LW and net" loading="lazy"></div>
+    <figcaption><b>Aerosol heating rate by latitude and day of year, mK/day:</b> rows shortwave, longwave, net; columns emulator, numerical, MAM4 (shared scale), then emulator minus numerical. Each value is the mass-weighted mean over that latitude's stratospheric levels; 5-day smoothing.</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/fig3_f_heating_bands.png" alt="Heating rate time series in six latitude bands" loading="lazy"></div>
+    <figcaption><b>The same in six latitude bands,</b> TOMAS numerical solid and MAM4 dotted, 15-day running mean.</figcaption>
+  </figure>
+  <ul class="tight">
+    <li><b>Longwave heating</b> follows the aerosol and has little seasonal cycle of its own: it grows steadily in the two plume belts (30–60° and 0–30° in each hemisphere) as aerosol builds up. Over the polar caps it is small, and over Antarctica it turns negative from about day 310 to the end of the year (down to −10 mK/day).</li>
+    <li><b>Shortwave heating</b> is strongly seasonal and changes sign with latitude. It is negative at high latitudes in each hemisphere's summer, down to −15 to −20 mK/day: the aerosol reflects sunlight that the gases below would otherwise absorb. It is slightly positive (+2 to +7 mK/day) in the subtropics. The polar shortwave signal switches off in polar night, which gives the curved edges in the top row.</li>
+    <li><b>Net heating is therefore seasonal only at high latitudes:</b> the polar caps are net cooled in summer (Arctic about −18 mK/day around day 140, Antarctic about −25 mK/day in late December), while the 30°N and 30°S belts warm steadily, up to 40–47 mK/day.</li>
+    <li><b>MAM4</b> follows TOMAS closely in longwave; its summer polar shortwave cooling is weaker, so its high-latitude net cooling is smaller.</li>
+    <li><b>Emulator minus numerical</b> is largest along the plume belts late in the year (up to about 1 mK/day, a few percent), the same place its particles are smaller.</li>
+  </ul>
+  <figure>
+    <div class="img"><img src="img/v2_fig3_a_heating_latp_annual.png" alt="Annual-mean zonal-mean aerosol heating rate, three schemes" loading="lazy"></div>
+    <figcaption><b>Zonal-mean heating rate by latitude and pressure, annual mean.</b> Peak 0.149 K/day at 52 hPa near 30°N and 30°S in all three.</figcaption>
+  </figure>
+  <div class="grid2">
+    <figure>
+      <div class="img"><img src="img/v2_fig3_b_heating_latp_monthly.gif" alt="Monthly zonal-mean heating rate animation" loading="lazy"></div>
+      <figcaption><b>Monthly means.</b></figcaption>
+    </figure>
+    <figure>
+      <div class="img"><img src="img/v2_fig3_c_heating_map_50hPa_annual.png" alt="Heating rate map at 52 hPa" loading="lazy"></div>
+      <figcaption><b>Map at 52 hPa (injection level), annual mean.</b></figcaption>
+    </figure>
+  </div>
+
+  <h3>Size distribution per grid cell</h3>
+  <p>Column size statistics over stratospheric levels: column number per bin, lognormal fit by moments for the geometric mean diameter D<sub>g</sub> and σ<sub>g</sub>, mass-weighted diameter, and effective diameter dry and wet (Tabazadeh water uptake, the model's own code). Each TOMAS column holds two populations, a numerous mode below 10 nm and a mass-carrying mode at 300–800 nm, so D<sub>g</sub> and σ<sub>g</sub> are compromise values. MAM4 stores fixed-width lognormal modes (σ<sub>g</sub> 1.8/1.6/1.8), spread here over the TOMAS bins, so its D<sub>g</sub> and σ<sub>g</sub> are not like-for-like with TOMAS; compare the mass-weighted and effective diameters instead.</p>
+  <figure>
+    <div class="img"><img src="img/v2_fig4_b2_size_maps_l30.png" alt="Mass-weighted and effective diameter maps, last 30 days" loading="lazy"></div>
+    <figcaption><b>Mass-weighted diameter, dry and wet effective diameter, last 30 days, injection runs.</b> Differences in % of numerical. The emulator holds the same sulfur in particles 2.5–3.5 % smaller, which fits its ~2 % weaker longwave forcing (not tested as a cause).</figcaption>
+  </figure>
+  <figure>
+    <div class="img"><img src="img/v2_fig4_b1_size_maps_l30.png" alt="Dg and sigma_g maps, last 30 days" loading="lazy"></div>
+    <figcaption><b>D<sub>g</sub> and σ<sub>g</sub>, last 30 days.</b></figcaption>
+  </figure>
+  <details>
+    <summary>Annual means</summary>
+    <figure><div class="img"><img src="img/v2_fig4_a2_size_maps_ann.png" alt="Mass-weighted and effective diameter maps, annual mean" loading="lazy"></div></figure>
+    <figure><div class="img"><img src="img/v2_fig4_a1_size_maps_ann.png" alt="Dg and sigma_g maps, annual mean" loading="lazy"></div></figure>
+  </details>
+  <h3>Global-mean wet size distribution</h3>
+  <figure>
+    <div class="img"><img src="img/v2_fig4_f_wet_size_distribution.png" alt="Global-mean stratospheric number, surface area and volume distributions against wet diameter, three schemes" loading="lazy"></div>
+    <figcaption><b>Global-mean stratospheric number, surface area and wet volume against wet diameter.</b> Rows: annual mean, last 30 days, and the annual SAI increment (injection minus control). One frame per day, stratospheric cells only, column- and area-weighted. Water uptake is the same for all three schemes and identical to the TOMAS runs: Tabazadeh equilibrium H₂SO₄ weight fraction from the emulator's temperature and the CESM humidity climatology (mean stratospheric cell 214.5 K, RH 0.145, about 61 wt% acid). MAM4's modes, spread onto the TOMAS bins, get this same growth rather than MAM4's own. Grey dashed: TOMAS numerical against dry diameter. Dotted ticks: each scheme's wet effective diameter.</figcaption>
+  </figure>
+  <div class="tbl"><table>
+    <thead><tr><th>global stratospheric, emulator / numerical / MAM4</th><th>annual</th><th>last 30 days</th><th>annual SAI increment</th></tr></thead>
+    <tbody>
+      <tr><td>wet effective diameter (nm)</td><td>552 / 561 / 538</td><td>662 / 677 / 675</td><td>594 / 598 / 572</td></tr>
+      <tr><td>dry effective diameter (nm)</td><td>446 / 453 / 432</td><td>524 / 535 / 530</td><td>480 / 482 / 458</td></tr>
+      <tr><td>wet mass-weighted diameter (nm)</td><td>639 / 645 / 731</td><td>737 / 749 / 864</td><td>—</td></tr>
+      <tr><td>growth factor D<sub>wet</sub>/D<sub>dry</sub>, mass-weighted</td><td>1.218 / 1.219 / 1.222</td><td>1.233 / 1.233 / 1.240</td><td>1.215 / 1.215 / 1.219</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="tight">
+    <li>Water swells the particles by about 22 % in diameter, the same for all three schemes, since they share the prescription.</li>
+    <li>The emulator's wet spectrum lies on top of numerical's above ~100 nm; its wet effective diameter is 1.6 % smaller over the year and 2.2 % smaller in the last 30 days. In the SAI increment it has a dip in number around 20–50 nm that numerical does not.</li>
+    <li>MAM4 puts its particles in a 10–100 nm Aitken mode with almost nothing below 5 nm, where TOMAS has most of its number. Its accumulation mode is broader with a tail above 1 µm, which raises its mass-weighted diameter by ~13 %, while its Aitken mode adds surface area and pulls its effective diameter down.</li>
+    <li>These are ratios of global sums, so they are larger than the averages of per-column values in the maps below.</li>
+  </ul>
+  <figure class="narrow">
+    <div class="img"><img src="img/v2_fig4_e_column_size_distribution.png" alt="Global-mean column size distribution, three schemes" loading="lazy"></div>
+    <figcaption><b>Global-mean column dN/dlnD and dM/dlnD,</b> showing the two TOMAS modes behind the D<sub>g</sub>/σ<sub>g</sub> caveat, and MAM4's modal shape.</figcaption>
+  </figure>
+  <div class="grid2">
+    <figure>
+      <div class="img"><img src="img/v2_fig4_c_column_NM_sai_minus_ctl_ann.png" alt="Added column mass and number, annual mean" loading="lazy"></div>
+      <figcaption><b>Added column SO₄ mass and particle number</b> (injection minus control), annual mean.</figcaption>
+    </figure>
+    <figure>
+      <div class="img"><img src="img/v2_fig4_d_column_NM_sai_minus_ctl_l30.png" alt="Added column mass and number, last 30 days" loading="lazy"></div>
+      <figcaption><b>Same, last 30 days.</b></figcaption>
+    </figure>
+  </div>
+
+  <h3 id="coupled-transport">Sulfate transport</h3>
+  <figure>
+    <div class="img"><img src="img/v2_fig5_column_sulfate_transport.gif" alt="Animated added column sulfate through the year, three schemes" loading="lazy"></div>
+    <figcaption><b>Added stratospheric column sulfate, mg/m², every 2nd day of 1997,</b> all three schemes. Fixed scale and one colour palette for all frames; the early plume saturates.</figcaption>
+  </figure>
+</section>
+
+<footer>Runs: <code>/data/AIDE-SAI-link/runs/emu_campaign_1997/</code> (r1/r1c emulator, r2/r2c numerical, r3/r3c MAM4). Figures and method notes: <code>linking_plots/</code>. Year 2: <code>/data/AIDE-SAI-link/runs/emu_campaign_1997_y2/</code>. Generated 6 Nov 2026; two-year coupled results, DJF/JJA climate and 10-year age of air added 9 Nov 2026.</footer>
+</div>

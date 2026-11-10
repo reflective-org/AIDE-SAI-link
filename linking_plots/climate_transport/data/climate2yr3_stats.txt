@@ -1,0 +1,12 @@
+T DJF emu - c1   : RMS   1.49 K  mean  -0.05
+T DJF emu - era5 : RMS   6.19 K  mean  +1.51
+T DJF c1 - era5 : RMS   5.94 K  mean  +1.56
+T JJA emu - c1   : RMS   1.97 K  mean  -0.07
+T JJA emu - era5 : RMS   6.46 K  mean  +2.42
+T JJA c1 - era5 : RMS   6.24 K  mean  +2.49
+u DJF emu - c1   : RMS   6.09 m s  mean  -0.11
+u DJF emu - era5 : RMS  10.51 m s  mean  -2.04
+u DJF c1 - era5 : RMS   7.12 m s  mean  -1.93
+u JJA emu - c1   : RMS   8.65 m s  mean  +0.80
+u JJA emu - era5 : RMS  10.27 m s  mean  -3.24
+u JJA c1 - era5 : RMS   7.58 m s  mean  -4.03

@@ -1,0 +1,30 @@
+AOA run: 12 model years (4380 days), mean step 0.278 s (1460 steps/yr -> 6.8 min/yr)
+  AOA 10.7 hPa -0: final-yr mean 3.89 yr, drift +0.034 yr/yr (+0.9 %/yr)
+  AOA 10.7 hPa +60: final-yr mean 4.61 yr, drift +0.045 yr/yr (+1.0 %/yr)
+  AOA 10.7 hPa -60: final-yr mean 5.05 yr, drift +0.055 yr/yr (+1.1 %/yr)
+  AOA 51.7 hPa -0: final-yr mean 2.57 yr, drift +0.018 yr/yr (+0.7 %/yr)
+  AOA 51.7 hPa +60: final-yr mean 3.41 yr, drift +0.028 yr/yr (+0.8 %/yr)
+  AOA 51.7 hPa -60: final-yr mean 3.94 yr, drift +0.038 yr/yr (+1.0 %/yr)
+  AOA 2.1 hPa -0: final-yr mean 4.67 yr, drift +0.047 yr/yr (+1.0 %/yr)
+  AOA 2.1 hPa +60: final-yr mean 4.85 yr, drift +0.049 yr/yr (+1.0 %/yr)
+  band mass-weighted mean AOA final yr 2.58 yr, drift +0.021 yr/yr
+  fraction of band (area*dp weighted) with |drift| < 1 %/yr: 0.94; < 5 %/yr: 1.00
+  INJ day 30: injected 0.822 Tg, in band 0.821 Tg (99.8 %); column mass fraction |lat|>45: 0.07, |lat|<20: 0.07
+  INJ day 90: injected 2.466 Tg, in band 2.423 Tg (98.3 %); column mass fraction |lat|>45: 0.28, |lat|<20: 0.04
+  INJ day 180: injected 4.931 Tg, in band 4.671 Tg (94.7 %); column mass fraction |lat|>45: 0.24, |lat|<20: 0.07
+  INJ day 365: injected 10.000 Tg, in band 8.144 Tg (81.4 %); column mass fraction |lat|>45: 0.32, |lat|<20: 0.16
+  INJ colour limits: column 1.0e-07-1.0e-03 kg/m2, zonal mean 1.0e-01-1.0e+03 ppbm
+CESM-wind control: 12 years; compared at year 12
+  year 12 AOA 10.7 hPa -0: emu 3.89  cesm 2.90 yr
+  year 12 AOA 10.7 hPa +60: emu 4.61  cesm 3.97 yr
+  year 12 AOA 10.7 hPa -60: emu 5.05  cesm 4.16 yr
+  year 12 AOA 51.7 hPa -0: emu 2.57  cesm 1.04 yr
+  year 12 AOA 51.7 hPa +60: emu 3.41  cesm 2.96 yr
+  year 12 AOA 51.7 hPa -60: emu 3.94  cesm 3.51 yr
+  year 12 AOA 2.1 hPa -0: emu 4.67  cesm 3.78 yr
+  year 12 AOA 2.1 hPa +60: emu 4.85  cesm 4.11 yr
+  band mass-weighted mean AOA year 12: emu 2.58 cesm 1.74 yr
+  CESM-wind drift year 12 - 11: 10 hPa EQ +0.010 yr/yr, band mean +0.006
+  INJ day 90 in band: emu 2.423 Tg, CESM winds 2.366 Tg
+  INJ day 180 in band: emu 4.671 Tg, CESM winds 4.393 Tg
+  INJ day 365 in band: emu 8.144 Tg, CESM winds 7.441 Tg

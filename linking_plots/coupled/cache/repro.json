@@ -1,0 +1,23 @@
+{
+ "emu_inj_repro_maxabs": 6.103515625e-05,
+ "emu_inj_repro_bitfrac_min": 0.9978117766203703,
+ "emu_inj_repro_gmdiff_maxabs": 2.844282110965334e-08,
+ "emu_ctl_repro_maxabs": 3.0517578125e-05,
+ "emu_ctl_repro_bitfrac_min": 0.9998191550925926,
+ "emu_ctl_repro_gmdiff_maxabs": 3.649000538634274e-08,
+ "emu_swdn16_vs_swdn4_gm": 4.623297286343586e-06,
+ "num_inj_repro_maxabs": 3.0517578125e-05,
+ "num_inj_repro_bitfrac_min": 0.99755859375,
+ "num_inj_repro_gmdiff_maxabs": 4.023536566592518e-08,
+ "num_ctl_repro_maxabs": 3.0517578125e-05,
+ "num_ctl_repro_bitfrac_min": 0.9997829861111112,
+ "num_ctl_repro_gmdiff_maxabs": 4.623574769423451e-08,
+ "num_swdn16_vs_swdn4_gm": 4.623297286343586e-06,
+ "mam_inj_repro_maxabs": 6.103515625e-05,
+ "mam_inj_repro_bitfrac_min": 0.9959309895833334,
+ "mam_inj_repro_gmdiff_maxabs": 3.9543582109722893e-08,
+ "mam_ctl_repro_maxabs": 3.0517578125e-05,
+ "mam_ctl_repro_bitfrac_min": 0.9995840567129629,
+ "mam_ctl_repro_gmdiff_maxabs": 3.6897019404405775e-08,
+ "mam_swdn16_vs_swdn4_gm": 4.623297286343586e-06
+}

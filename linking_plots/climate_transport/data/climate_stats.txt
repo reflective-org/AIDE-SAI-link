@@ -1,0 +1,7 @@
+T [K]: annual-mean zonal-mean diff area-weighted RMS 5.65, max|diff| 26.4
+u [m/s]: annual-mean zonal-mean diff area-weighted RMS 7.5, max|diff| 30.7
+v [m/s]: annual-mean zonal-mean diff area-weighted RMS 0.245, max|diff| 0.937
+omega [mPa/s]: annual-mean zonal-mean diff area-weighted RMS 0.319, max|diff| 2.36
+T limits 187.0-289.0 K, u limits +-90.0
+annual-mean T at 100 hPa EQ: emu 200.2 cesm 193.4
+max annual-mean u (emu/cesm): 36.4/48.3; min -26.7/-14.7

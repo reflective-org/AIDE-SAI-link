@@ -1,0 +1,16 @@
+model cycles complete: fullcol 5 (years 9-10 used), band 5
+CLaMS-ERA5 2000-2014 off150 (0-10 deg, 146.8 hPa) = 0.088 yr
+sfc - p150 at 50 hPa, 10S-10N: 0.932 yr; at 10 hPa 0.950 yr
+sfc vs CLaMS-ERA5: RMS 0.627 mean -0.337 yr
+p150 minus WACCM6: RMS 0.886 mean -0.770 yr
+p150 minus (CLaMS - off150): RMS 1.344 mean -1.239 yr
+band minus WACCM6: RMS 0.540 mean +0.005 yr
+band minus (CLaMS - off150): RMS 0.742 mean -0.463 yr
+drift sfc (last cycle minus previous, per yr), 100-5 hPa mean +0.0432 yr/yr, max |.| 0.0820
+drift p150 (last cycle minus previous, per yr), 100-5 hPa mean +0.0153 yr/yr, max |.| 0.0336
+drift band (last cycle minus previous, per yr), 100-5 hPa mean +0.0558 yr/yr, max |.| 0.0909
+sfc    10S-10N age at ~50 hPa 2.02, ~20 hPa 2.74, ~10 hPa 3.20 yr
+p150   10S-10N age at ~50 hPa 1.09, ~20 hPa 1.79, ~10 hPa 2.25 yr
+band   10S-10N age at ~50 hPa 1.71, ~20 hPa 2.44, ~10 hPa 2.91 yr
+CLaMS  10S-10N age at ~50 hPa 1.94, ~20 hPa 3.06, ~10 hPa 3.70 yr
+WACCM  10S-10N age at ~50 hPa 1.08, ~20 hPa 2.49, ~10 hPa 3.06 yr

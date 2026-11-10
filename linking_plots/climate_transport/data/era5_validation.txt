@@ -1,0 +1,16 @@
+T    1 hPa: monthly RMS diff 0.23, mean +0.01, max|d| 0.91; ref range 229.4..287.8
+T    2 hPa: monthly RMS diff 0.26, mean -0.09, max|d| 1.07; ref range 223.1..288.1
+T    5 hPa: monthly RMS diff 0.17, mean +0.03, max|d| 0.65; ref range 207.1..266.5
+T   10 hPa: monthly RMS diff 0.14, mean +0.02, max|d| 0.64; ref range 189.7..256.4
+T   30 hPa: monthly RMS diff 0.09, mean +0.00, max|d| 0.32; ref range 182.1..239.4
+T   50 hPa: monthly RMS diff 0.07, mean -0.01, max|d| 0.32; ref range 183.7..236.3
+T  100 hPa: monthly RMS diff 0.05, mean -0.00, max|d| 0.27; ref range 189.3..233.1
+u    1 hPa: monthly RMS diff 0.51, mean +0.04, max|d| 1.68; ref range -64.1..121.0
+u    2 hPa: monthly RMS diff 0.56, mean +0.10, max|d| 2.37; ref range -64.1..99.9
+u    5 hPa: monthly RMS diff 0.35, mean -0.11, max|d| 1.36; ref range -40.7..88.2
+u   10 hPa: monthly RMS diff 0.22, mean -0.06, max|d| 0.76; ref range -30.0..79.5
+u   30 hPa: monthly RMS diff 0.16, mean +0.02, max|d| 0.69; ref range -20.1..62.1
+u   50 hPa: monthly RMS diff 0.15, mean -0.03, max|d| 0.48; ref range -21.3..52.6
+u  100 hPa: monthly RMS diff 0.10, mean -0.01, max|d| 0.31; ref range -11.5..40.0
+annual 10S-10N T profile: 1hPa 263.7, 2hPa 263.2, 3hPa 255.5, 5hPa 241.1, 7hPa 233.3, 10hPa 228.9, 20hPa 222.0, 30hPa 216.4, 50hPa 206.9, 70hPa 198.0, 100hPa 192.5, 125hPa 197.8, 150hPa 205.3
+annual global(cos) T at 1 hPa: 260.1

@@ -1,0 +1,16 @@
+AOA run: 5 model years (1825 days), mean step 0.291 s (1460 steps/yr -> 7.1 min/yr)
+  AOA 10.7 hPa -0: final-yr mean 3.06 yr, drift +0.361 yr/yr (+11.8 %/yr)
+  AOA 10.7 hPa +60: final-yr mean 3.52 yr, drift +0.493 yr/yr (+14.0 %/yr)
+  AOA 10.7 hPa -60: final-yr mean 3.76 yr, drift +0.582 yr/yr (+15.5 %/yr)
+  AOA 51.7 hPa -0: final-yr mean 2.09 yr, drift +0.176 yr/yr (+8.4 %/yr)
+  AOA 51.7 hPa +60: final-yr mean 2.69 yr, drift +0.282 yr/yr (+10.5 %/yr)
+  AOA 51.7 hPa -60: final-yr mean 3.01 yr, drift +0.378 yr/yr (+12.6 %/yr)
+  AOA 2.1 hPa -0: final-yr mean 3.56 yr, drift +0.505 yr/yr (+14.2 %/yr)
+  AOA 2.1 hPa +60: final-yr mean 3.67 yr, drift +0.538 yr/yr (+14.7 %/yr)
+  band mass-weighted mean AOA final yr 2.03 yr, drift +0.204 yr/yr
+  fraction of band (area*dp weighted) with |drift| < 1 %/yr: 0.03; < 5 %/yr: 0.03
+  INJ day 30: injected 0.822 Tg, in band 0.821 Tg (99.8 %); column mass fraction |lat|>45: 0.07, |lat|<20: 0.07
+  INJ day 90: injected 2.466 Tg, in band 2.423 Tg (98.3 %); column mass fraction |lat|>45: 0.28, |lat|<20: 0.04
+  INJ day 180: injected 4.931 Tg, in band 4.671 Tg (94.7 %); column mass fraction |lat|>45: 0.24, |lat|<20: 0.07
+  INJ day 365: injected 10.000 Tg, in band 8.144 Tg (81.4 %); column mass fraction |lat|>45: 0.32, |lat|<20: 0.16
+  INJ colour limits: column 1.0e-07-1.0e-03 kg/m2, zonal mean 1.0e-01-1.0e+03 ppbm

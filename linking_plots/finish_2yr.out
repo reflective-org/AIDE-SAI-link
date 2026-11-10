@@ -1,0 +1,12 @@
+Mon Nov  9 17:26:47 UTC 2026 all six complete
+r1_tomas_emu Complete in 28809s frames3d 1460
+r1c_tomas_emu_ctl Complete in 18106s frames3d 1460
+r2_tomas_fast Complete in 28200s frames3d 1460
+r2c_tomas_fast_ctl Complete in 27425s frames3d 1460
+r3_mam4 Complete in 21401s frames3d 1460
+r3c_mam4_ctl Complete in 21382s frames3d 1460
+Mon Nov  9 18:48:55 UTC 2026 run_coupled_2yr.sh exit 0
+wrote fig3_d/e/f in /data/AIDE-SAI-link/linking_plots/coupled/extra
+done: figures in /data/AIDE-SAI-link/linking_plots/coupled/figs_v2 and /data/AIDE-SAI-link/linking_plots/coupled/extra
+Mon Nov  9 18:48:55 UTC 2026
+FINISH_2YR_DONE

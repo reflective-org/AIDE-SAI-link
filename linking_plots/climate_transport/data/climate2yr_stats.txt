@@ -1,0 +1,16 @@
+T DJF emulator - hlc  : RMS   1.58 K  mean  -0.01
+T DJF emulator - c1   : RMS   1.49 K  mean  -0.05
+T DJF emulator - cesm : RMS   6.35 K  mean  +2.55
+T DJF emulator - era5 : RMS   6.19 K  mean  +1.51
+T JJA emulator - hlc  : RMS   2.70 K  mean  +0.03
+T JJA emulator - c1   : RMS   1.97 K  mean  -0.07
+T JJA emulator - cesm : RMS   7.08 K  mean  +3.68
+T JJA emulator - era5 : RMS   6.46 K  mean  +2.42
+u DJF emulator - hlc  : RMS   6.59 m s  mean  +0.50
+u DJF emulator - c1   : RMS   6.09 m s  mean  -0.11
+u DJF emulator - cesm : RMS   9.63 m s  mean  -3.37
+u DJF emulator - era5 : RMS  10.51 m s  mean  -2.04
+u JJA emulator - hlc  : RMS   8.21 m s  mean  +1.06
+u JJA emulator - c1   : RMS   8.65 m s  mean  +0.80
+u JJA emulator - cesm : RMS  10.65 m s  mean  -3.07
+u JJA emulator - era5 : RMS  10.27 m s  mean  -3.24

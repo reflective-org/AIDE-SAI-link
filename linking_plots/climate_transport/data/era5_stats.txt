@@ -1,0 +1,19 @@
+Annual-mean zonal means 1997, 1.2-143 hPa band, 365 daily 06 UTC samples; RMS area-weighted (cos lat), equal weight per level
+T [K]: RMS(emu-ERA5) 5.13  RMS(CESM-ERA5) 1.99  RMS(emu-CESM) 5.65; max|emu-ERA5| 23.1  max|CESM-ERA5| 9.11
+u [m/s]: RMS(emu-ERA5) 8.73  RMS(CESM-ERA5) 6.62  RMS(emu-CESM) 7.5; max|emu-ERA5| 24.7  max|CESM-ERA5| 20.2
+v [m/s]: RMS(emu-ERA5) 0.288  RMS(CESM-ERA5) 0.214  RMS(emu-CESM) 0.245; max|emu-ERA5| 1.32  max|CESM-ERA5| 1.03
+  1-10 hPa: T RMS emu-ERA5 6.25 CESM-ERA5 2.41; u RMS emu-ERA5 7.77 CESM-ERA5 7.44
+  10-50 hPa: T RMS emu-ERA5 3.97 CESM-ERA5 1.80; u RMS emu-ERA5 8.12 CESM-ERA5 7.18
+  50-150 hPa: T RMS emu-ERA5 4.70 CESM-ERA5 1.54; u RMS emu-ERA5 10.40 CESM-ERA5 4.49
+annual-mean T at 103.3 hPa, 10S-10N mean: ERA5 193.3  CESM 193.6  emulator 200.9
+annual-mean T at 51.7 hPa, 10S-10N mean: ERA5 206.0  CESM 204.3  emulator 211.8
+annual-mean T at 10.7 hPa, 10S-10N mean: ERA5 228.2  CESM 229.7  emulator 224.5
+annual-mean T at 1.6 hPa, 10S-10N mean: ERA5 263.3  CESM 261.3  emulator 271.0
+annual-mean T min (cold point) [K @ hPa, lat]: ERA5 193.2 @ 103hPa,0  CESM 193.3 @ 88hPa,-0  emulator 199.5 @ 122hPa,-1
+annual-mean T max [K @ hPa]: ERA5 263.9 @ 1.2  CESM 262.8 @ 1.2  emulator 282.7 @ 1.2
+annual-mean peak westerly u SH [m/s @ hPa, lat]: ERA5 33.2 @ 6.9,-61  CESM 48.3 @ 1.6,-62  emulator 36.4 @ 2.1,-57
+annual-mean peak westerly u NH [m/s @ hPa, lat]: ERA5 25.6 @ 143.0,33  CESM 24.5 @ 143.0,34  emulator 14.0 @ 143.0,44
+annual-mean min u (easterly) [m/s]: ERA5 -19.8  CESM -14.7  emulator -26.7
+max daily zonal-mean u over 1997, SH: ERA5 125.0  CESM 129.2  emulator 113.6
+max daily zonal-mean u over 1997, NH: ERA5 94.5  CESM 86.1  emulator 97.7
+colour limits: T 193.0-283.0 K, u +-50.0, v +-1.04
