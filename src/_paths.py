@@ -34,7 +34,7 @@ MODELS = os.path.join(REPO_ROOT, 'models')
 INPUTS = os.path.join(REPO_ROOT, 'inputs')
 
 # Subdirectories FIRST, src/ itself last -- see rule 1 above.
-for _d in ('advection', 'radiation', 'settling', 'microphysics', ''):
+for _d in ('advection', 'radiation', 'settling', 'microphysics', 'met', ''):
     _p = os.path.join(SRC, _d)
     if _p not in sys.path:
         sys.path.insert(0, _p)
