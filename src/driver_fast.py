@@ -5,6 +5,11 @@ natively-batched reduced model `tomas_jax.fast` (gpu-fast branch) instead of the
 hand-assembled per-cell chain (coupling.run_microphysics_full). Advection is the
 same fct_lr swap coupling.py already uses, so the two agree on transport.
 
+Since 2026-10-09 the seam takes a second engine: MICRO_ENGINE=emulator swaps in
+the learned 6 h operator from /data/tomas-emulator instead of run_fast, and
+MICRO_REF=<other engine> runs that one too, on the same input, for a per-step
+A/B (docs/EMULATOR.md). The fast physics remains the default and is unchanged.
+
 IC/BC source is coupling.py's default, AER_SRC=mam4 (per-step dynamic from the
 CESM hourly series). Pass AER_SRC=carma for the static CARMA reservoir instead.
 
@@ -111,37 +116,137 @@ from fct_fast import advect_step_batch as _fast_advect
 # coupling.py, and coupling.py reads the environment at import time, so hoisting
 # this line changes the configuration the run uses. (This is one of the reasons
 # ruff's import-sorting rule I001 is disabled -- see docs/REPO_LAYOUT.md.)
-from tomas_fast import (run_microphysics_full_fast, N_FAST_STEPS, FAST_DT,
-                        FAST_CELL_CAP, FAST_SORT)
+#
+# MICRO_ENGINE (2026-10-09) selects WHICH batched engine fills the seam:
+#   fast      (default) tomas_jax.fast.run_fast, 60 x 360 s inner steps -- the
+#             production physics, unchanged.
+#   emulator  the learned 6 h operator from /data/tomas-emulator (a bin-token
+#             transformer trained on tomas_jax.fast trajectories; see
+#             docs/EMULATOR.md and microphysics/tomas_emulator.py). ONE forward
+#             pass per cell per step. Requires torch in the run environment.
+# MICRO_REF (optional) names the OTHER engine, to be run on the SAME input every
+# MICRO_REF_EVERY steps purely for comparison: the run advances with
+# MICRO_ENGINE, the reference output is compared cell-by-cell and discarded, and
+# the per-step error + the timing of BOTH engines go to micro_bench_<TAG>.npz
+# (microphysics/micro_bench.py). This is how the emulator is benchmarked against
+# the fast physics as ground truth without a second harness.
+MICRO_ENGINE = os.environ.get('MICRO_ENGINE', 'fast').lower()
+MICRO_REF = os.environ.get('MICRO_REF', '').lower()
+MICRO_REF_EVERY = int(os.environ.get('MICRO_REF_EVERY', '1'))
+_ENGINES = ('fast', 'emulator')
+if MICRO_ENGINE not in _ENGINES:
+    sys.exit(f"driver_fast: MICRO_ENGINE must be one of {_ENGINES}; got {MICRO_ENGINE!r}")
+if MICRO_REF and MICRO_REF not in _ENGINES:
+    sys.exit(f"driver_fast: MICRO_REF must be empty or one of {_ENGINES}; got {MICRO_REF!r}")
+if MICRO_REF == MICRO_ENGINE:
+    sys.exit("driver_fast: MICRO_REF names the same engine as MICRO_ENGINE -- "
+             "the comparison would be a no-op")
+_need = {MICRO_ENGINE} | ({MICRO_REF} if MICRO_REF else set())
+
+# Both adapters import coupling.py, so they too must stay below the setdefault
+# block above (see the note on tomas_fast). Each one is imported only when its
+# engine is used: the emulator adapter needs torch, the fast adapter needs the
+# tomas-jax gpu-fast branch, and a run that uses one should not require the
+# other's dependencies.
+_ENGINE_FN = {}
+if 'fast' in _need:
+    from tomas_fast import (run_microphysics_full_fast, N_FAST_STEPS, FAST_DT,
+                            FAST_CELL_CAP, FAST_SORT)
+    _ENGINE_FN['fast'] = run_microphysics_full_fast
+if 'emulator' in _need:
+    import tomas_emulator
+    _ENGINE_FN['emulator'] = tomas_emulator.run_microphysics_full_emulator
+# OH sampling: the SZA parabola is evaluated at C.OH_SUBSTEPS substep centers
+# per step. tomas_fast sets it to its 60 inner steps at import; the emulator
+# interpolates whatever it is given onto its 13 endpoints (tomas_emulator.
+# _oh_to_endpoints), so 60 serves both and keeps the emulator's OH input
+# identical to the physics' whatever the engine mix. An explicit OH_SUBSTEPS in
+# the environment still wins (both adapters resample from any row count).
+if 'OH_SUBSTEPS' not in os.environ:
+    C.OH_SUBSTEPS = 60
 
 # ---- the advection swap (same scheme coupling.py binds for itself) ----------
 _ADV_CFL = float(os.environ.get('ADV_CFL', '0.5'))
 _ADV_DTYPE = jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float64
 # ADV_SCHEME selects the transport form:
-#   lr   (default) advection/fct_lr.py -- Lin-Rood FLUX form with air-mass
+#   ffsl (default since 2026-10-15) advection/ffsl_lr.py -- fct_lr at large
+#        Courant number (Lin & Rood's flux-form semi-Lagrangian extension): the
+#        same flux-form sweeps, faces, budgets and limiter at ADV_FFSL_K=24
+#        sub-steps instead of 70-250. advect 1.5 s/step vs 7.0; 30 days within
+#        0.2 % of lr on the budgets (docs/PROCESSES.md 1.9). 2026-10-14.
+#   lr   (the default until 2026-10-15) advection/fct_lr.py -- Lin-Rood FLUX form with air-mass
 #        tracking. Tracer mass is conserved to ROUNDOFF (~1e-15/day) for any wind
 #        field, divergent or not, so it does not depend on the winds satisfying
 #        continuity. Costs ~5x more substeps (no integer-shift FFSL in flux form).
 #   fast advection/fct_fast.py -- advective form with the 2026-07-25 fixes
 #        (true grid spacing, cos(phi) metric, continuity omega, conserving polar
 #        caps). Residual ~3e-4/day; cheaper. Kept as the validated fallback.
-_ADV_SCHEME = os.environ.get('ADV_SCHEME', 'lr').lower()
+#   sl   advection/sl_lr.py -- semi-Lagrangian (dinosaur's operator, vendored in
+#        sl_core.py): no CFL limit, ADV_SL_K sub-steps on the hourly winds, cubic
+#        gather + quasi-monotone limiter, closed column + per-tracer mass fixer
+#        (ADV_SL_FIXER), Dirichlet edge levels (coupling.py sets ADV_WCONT=0).
+#        ~49 ms/step vs 6.6 s. docs/TRANSPORT_SL_HANDOFF.md. 2026-10-13.
+_ADV_SCHEME = os.environ.get('ADV_SCHEME', 'ffsl').lower()
 if _ADV_SCHEME == 'lr':
     from fct_lr import advect_step_batch as _adv_fn
+elif _ADV_SCHEME == 'sl':
+    import sl_lr
+    _adv_fn = sl_lr.advect_step_batch
+elif _ADV_SCHEME == 'ffsl':
+    import ffsl_lr                 # fct_lr at large Courant number (2026-10-14)
+    _adv_fn = ffsl_lr.advect_step_batch
 else:
     _adv_fn = _fast_advect
 C.advect_step_batch = functools.partial(_adv_fn, cfl=_ADV_CFL, dtype=_ADV_DTYPE)
 
 # ---- the ONE micro swap; advection already swapped above --------------------
-C.run_microphysics_full = run_microphysics_full_fast
+_micro_fn = _ENGINE_FN[MICRO_ENGINE]
+if MICRO_REF:
+    from micro_bench import make_benchmarked
+    _micro_fn = make_benchmarked(_micro_fn, MICRO_ENGINE, _ENGINE_FN[MICRO_REF],
+                                 MICRO_REF, every=MICRO_REF_EVERY,
+                                 tag=os.environ.get('OUT_TAG', 'tomas_fast'))
+# MICRO_SAMPLE_EVERY=N (2026-10-13): every N steps write a stratified sample of
+# the cells the engine is about to see (microphysics/micro_sampler.py) -- the
+# emulator's training data from this model's own states. Outermost wrapper, so
+# what is sampled is exactly the engine input. Needs the emulator adapter for
+# its triage test, i.e. torch, even under MICRO_ENGINE=fast.
+MICRO_SAMPLE_EVERY = int(os.environ.get('MICRO_SAMPLE_EVERY', '0'))
+if MICRO_SAMPLE_EVERY > 0:
+    import tomas_emulator  # noqa: F811 -- the sampler uses its triage test
+    from micro_sampler import make_sampled
+    _micro_fn = make_sampled(_micro_fn, every=MICRO_SAMPLE_EVERY,
+                             n=int(os.environ.get('MICRO_SAMPLE_N', '5000')),
+                             tag=os.environ.get('OUT_TAG', 'tomas_fast'))
+C.run_microphysics_full = _micro_fn
+
+
+def _describe(engine):
+    if engine == 'fast':
+        return (f"tomas_jax.fast.run_fast  ({N_FAST_STEPS} steps x {FAST_DT:.0f}s, "
+                f"cap {FAST_CELL_CAP} cells/chunk, sort={FAST_SORT})")
+    return tomas_emulator.describe()
+
 
 print("=" * 60, flush=True)
-print(f"COUPLING: tomas_jax.fast (GPU-fast reduced model) + "
+print(f"COUPLING: {'tomas_jax.fast (GPU-fast reduced model)' if MICRO_ENGINE == 'fast' else 'TOMAS EMULATOR (learned 6 h operator)'} + "
       f"{C.AER_SRC.upper()} IC/BC", flush=True)
-print(f"  micro    : tomas_jax.fast.run_fast  ({N_FAST_STEPS} steps x "
-      f"{FAST_DT:.0f}s, cap {FAST_CELL_CAP} cells/chunk, sort={FAST_SORT})",
-      flush=True)
-print(f"  advection: advection/fct_{_ADV_SCHEME}  (cfl={_ADV_CFL}, "
+print(f"  micro    : {_describe(MICRO_ENGINE)}", flush=True)
+if MICRO_SAMPLE_EVERY > 0:
+    print(f"  SAMPLING : every {MICRO_SAMPLE_EVERY} step(s), {os.environ.get('MICRO_SAMPLE_N', '5000')} cells "
+          f"-> micro_samples_{os.environ.get('OUT_TAG', 'tomas_fast')}_s*.npz", flush=True)
+if MICRO_REF:
+    print(f"  REFERENCE: {_describe(MICRO_REF)}\n"
+          f"             run on the same input every {MICRO_REF_EVERY} step(s) for "
+          f"comparison only -> micro_bench_{os.environ.get('OUT_TAG', 'tomas_fast')}.npz",
+          flush=True)
+print((f"  advection: advection/sl_lr  {sl_lr.describe()}  "
+       f"({'f32' if _ADV_DTYPE is jnp.float32 else 'f64'} gathers)")
+      if _ADV_SCHEME == 'sl' else
+      (f"  advection: advection/ffsl_lr  {ffsl_lr.describe()}  "
+       f"({'f32' if _ADV_DTYPE is jnp.float32 else 'f64'})")
+      if _ADV_SCHEME == 'ffsl' else
+      f"  advection: advection/fct_{_ADV_SCHEME}  (cfl={_ADV_CFL}, "
       f"{'f32' if _ADV_DTYPE is jnp.float32 else 'f64'})", flush=True)
 print(f"  OH       : " + (f"SZA curve sampled {C.OH_SUBSTEPS}x/step -> "
                           f"per-inner-step profile into run_fast" if C.OH_SZA

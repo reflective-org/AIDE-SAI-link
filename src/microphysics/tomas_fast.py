@@ -52,6 +52,13 @@ FAST_COAG_CAP  = int(os.environ.get('FAST_COAG_SUB_CAP', '256'))
 FAST_COND_CAP  = int(os.environ.get('FAST_COND_SUB_CAP', '40'))
 FAST_COAG_CMAX = float(os.environ.get('FAST_COAG_CMAX', '0.05'))
 FAST_SORT      = os.environ.get('FAST_SORT', '1') != '0'        # stiffness-sort chunks
+# FAST_MULTIGPU=1: split the cells over EVERY visible GPU (CUDA_VISIBLE_DEVICES=a,b,...)
+# and run one run_fast per GPU in parallel threads. Cells are independent, so this is
+# exact up to chunk composition (the adaptive coagulation runs a chunk to its slowest
+# lane, so a cell can take a different substep count). Cells are dealt out with
+# stride D (cell i -> GPU i % D), which spreads the plume over every GPU. Added
+# 2026-11-05 for the 1997 restart campaign; default off = the single-GPU path.
+FAST_MULTIGPU  = os.environ.get('FAST_MULTIGPU', '0') != '0'
 
 # number of inner fast steps that fill one coupling step (6 h / FAST_DT)
 N_FAST_STEPS = int(round(C.DT_MICRO / FAST_DT))
@@ -126,6 +133,17 @@ def run_microphysics_full_fast(num, mas, so2, h2so4, temp3d, pres3d, rh3d, oh3d,
     state = FastState.create(Nk=Nk_eff, Mk=Mk, Gc=Gc, xk=np.asarray(C.XK),
                              temp=T_f, pres=P_f, boxvol=C.BOXVOL, rh=RH_f)
 
+    if FAST_MULTIGPU:
+        import jax
+        if len(jax.devices()) > 1:
+            out_N, out_M, out_S, out_H = _run_fast_multi(
+                Nk_eff, Mt_clip, S_all, H_all, T_f, P_f, RH_f, OH_f, nbin)
+            num2   = (out_N * inv_rho[:, None]).T.reshape(nbin, nlev, nlat, nlon)
+            mas2   = (out_M * inv_rho[:, None]).T.reshape(nbin, nlev, nlat, nlon)
+            so2_2  = (out_S * inv_rho).reshape(nlev, nlat, nlon)
+            h2so4_2 = (out_H * inv_rho).reshape(nlev, nlat, nlon)
+            return num2, mas2, so2_2, h2so4_2, clip_add, clip_rem
+
     ncc = max(1, -(-ncell // FAST_CELL_CAP))          # ceil(ncell / cap)
     t0 = time.time()
     state2, diags = run_fast(
@@ -157,3 +175,66 @@ def run_microphysics_full_fast(num, mas, so2, h2so4, temp3d, pres3d, rh3d, oh3d,
     return num2, mas2, so2_2, h2so4_2, clip_add, clip_rem
 
 
+
+
+def _run_fast_multi(Nk_eff, Mt_clip, S_all, H_all, T_f, P_f, RH_f, OH_f, nbin):
+    """run_fast over every visible GPU, one thread per GPU (see FAST_MULTIGPU)."""
+    import threading
+    import jax
+    devs = jax.devices()
+    D = len(devs)
+    ncell = Nk_eff.shape[0]
+    out_N = np.empty((ncell, nbin)); out_M = np.empty((ncell, nbin))
+    out_S = np.empty(ncell);         out_H = np.empty(ncell)
+    info = [None] * D
+    errs = [None] * D
+
+    def work(d):
+        try:
+            sl = slice(d, None, D)
+            n = len(range(d, ncell, D))
+            with jax.default_device(devs[d]):
+                Mk = np.zeros((n, nbin, 2), dtype=np.float64)
+                Mk[:, :, SRTSO4] = Mt_clip[sl]
+                Gc = np.zeros((n, 2), dtype=np.float64)
+                Gc[:, GH2SO4] = H_all[sl]
+                Gc[:, GSO2]   = S_all[sl]
+                st = FastState.create(Nk=np.ascontiguousarray(Nk_eff[sl]), Mk=Mk,
+                                      Gc=Gc, xk=np.asarray(C.XK),
+                                      temp=np.ascontiguousarray(T_f[sl]),
+                                      pres=np.ascontiguousarray(P_f[sl]),
+                                      boxvol=C.BOXVOL,
+                                      rh=np.ascontiguousarray(RH_f[sl]))
+                oh = np.ascontiguousarray(OH_f[:, sl] if OH_f.ndim == 2 else OH_f[sl])
+                ncc = max(1, -(-n // FAST_CELL_CAP))
+                t0 = time.time()
+                st2, diags = run_fast(
+                    st, N_FAST_STEPS, dt=FAST_DT, oh_conc=oh,
+                    n_cell_chunks=ncc, sort_by_coag_cost=FAST_SORT,
+                    alpha=C.ALPHA_COND, fn_scale=FAST_FN_SCALE,
+                    coag_sub_cap=FAST_COAG_CAP, cond_sub_cap=FAST_COND_CAP,
+                    coag_c_max=FAST_COAG_CMAX)
+                out_N[sl] = np.asarray(st2.Nk)
+                out_M[sl] = np.asarray(st2.Mk[:, :, SRTSO4])
+                out_S[sl] = np.asarray(st2.Gc[:, GSO2])
+                out_H[sl] = np.asarray(st2.Gc[:, GH2SO4])
+                info[d] = (n, ncc, time.time() - t0,
+                           int(np.asarray(diags['coag_cap_hit']).sum()),
+                           int(np.asarray(diags['cond_cap_hit']).sum()))
+        except BaseException as e:          # re-raised in the caller's thread
+            errs[d] = e
+
+    t0 = time.time()
+    th = [threading.Thread(target=work, args=(d,)) for d in range(D)]
+    for t in th: t.start()
+    for t in th: t.join()
+    for e in errs:
+        if e is not None:
+            raise e
+    if os.environ.get('DEBUG') or os.environ.get('PROFILE'):
+        per = ' '.join(f"gpu{d}:{i[0]}c/{i[1]}ch/{i[2]:.1f}s" for d, i in enumerate(info))
+        cc = sum(i[3] for i in info); dc = sum(i[4] for i in info)
+        print(f"  [fast] run_fast x{D} GPUs: {ncell} cells x {N_FAST_STEPS} steps "
+              f"(dt={FAST_DT:.0f}s, sort={FAST_SORT}) in {time.time() - t0:.1f}s "
+              f"[{per}] | coag_cap_hit_steps={cc} cond_cap_hit_steps={dc}", flush=True)
+    return out_N, out_M, out_S, out_H

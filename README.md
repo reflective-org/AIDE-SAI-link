@@ -62,13 +62,25 @@ The intent is for each slot to be swappable — other meteorology sources
 including emulated dycores, and other aerosol schemes (CARMA, MAM, GLOMAP).
 Some of that seam already exists: `AER_SRC` selects the aerosol IC/BC source
 (`mam4` or `carma`), and `driver_fast.py` swaps the microphysics engine into
-`coupling.py` at import rather than branching inside it. The meteorology reader
-is **not** generic yet — it expects the CESM `h1` layout — so treat a new
-forcing source as work, not configuration.
+`coupling.py` at import rather than branching inside it — and since 2026-10-09
+that seam takes a second engine: `MICRO_ENGINE=emulator` replaces the
+`tomas_jax.fast` physics with a learned 6-hour operator (a transformer trained
+on that same physics), and `MICRO_REF=<other engine>` runs both on the same
+input for a per-step A/B. Since 2026-10-13 the emulator engine ships with
+its production configuration as defaults — the injection ring and the dense
+cells go to the physics, the gas chemistry is exact — and tracks the physics
+run to about 1 % for a month at a third of the stage's cost. See
+[docs/EMULATOR.md](./docs/EMULATOR.md) for the benchmark. The radiation seam
+has the same shape (2026-10-13): a per-hour cache serves the archive-only half
+of the stage bit-identically, and `RAD_ENGINE=emulator` replaces the remaining
+two-stream solve with two column networks on the cached clear sky (8.4 → 0.7
+s/step; `dT_rad` within 0.01 K zonal-mean of the physics over a month); see
+[docs/RADIATION.md](./docs/RADIATION.md). The meteorology reader is **not** generic yet — it expects the CESM
+`h1` layout — so treat a new forcing source as work, not configuration.
 
 ## Installation
 
-Two dependencies are separate repos, not on PyPI. They are **git submodules**
+Three dependencies are separate repos, not on PyPI. They are **git submodules**
 under `models/`, pinned to exact commits so a clone reconstructs the code that
 produced a result; override either with `TOMAS_JAX_PATH` / `RRTMGP_PATH`:
 
@@ -76,8 +88,9 @@ produced a result; override either with `TOMAS_JAX_PATH` / `RRTMGP_PATH`:
 |---|---|---|
 | [`models/tomas-jax`](https://github.com/reflective-org/tomas-jax) | sectional aerosol microphysics | `787c991`, branch **`gpu-fast`** — `main` has no `tomas_jax.fast` |
 | [`models/jax-rrtmgp`](https://github.com/climate-analytics-lab/jax-rrtmgp) | radiative transfer (`RAD=0` skips it) | `99d2d71`, **plus `patches/jax-rrtmgp-zenith.patch`** from this repo |
+| [`models/MAM4-JAX`](https://github.com/reflective-org/MAM4-JAX) | modal aerosol microphysics, `src/driver_mam4.py` only | `46f3cc7` (`main`); put it on the path with `export PYTHONPATH=$PWD/models/MAM4-JAX${PYTHONPATH:+:$PYTHONPATH}` |
 
-Neither is a plain checkout of its default branch:
+tomas-jax and jax-rrtmgp are not plain checkouts of their default branches:
 
 * **tomas-jax must be on `gpu-fast`.** `driver_fast.py` — the production entry
   point — imports `tomas_jax.fast`, the batched reduced engine, which only
@@ -101,6 +114,12 @@ pip install --upgrade "jax[cuda12]>=0.6.2"   # GPU wheel -- the CPU one cannot d
 ```
 
 In an existing clone, `git submodule update --init` populates `models/`.
+
+**Emulator weights are not in the repository.** The physics engines (`MICRO_ENGINE`
+default, `RAD_ENGINE` default) need nothing extra. `MICRO_ENGINE=emulator` needs the TOMAS
+emulator code and checkpoint (`EMU_CODE`, `EMU_ROOT`, `EMU_CKPT`), and `RAD_ENGINE=emulator`
+needs the radiation emulator weights (`RAD_EMU_CKPT`, default `inputs/rad_emulator/current`).
+They will be published separately; see `docs/CONFIGURATION.md` for the variables.
 
 **Why the patch is a separate step.** A submodule records a commit, and the
 zenith fix is not in any upstream commit — so `git submodule update` checks out
@@ -130,6 +149,11 @@ line needs the script that follows it:
 # models/ is located relative to this, so it does not have to be $HOME.
 REPO=$PWD
 export LD_LIBRARY_PATH=/run/nvidia/driver/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+# netCDF4/HDF5 takes an NFS lock when it opens the CESM files; if the NFS lock
+# manager is wedged (seen 2026-10-14: a run sits forever at "opening ...nc" in
+# D state while `flock -s <file> -c true` times out), disable the lock -- the
+# data is read-only:
+export HDF5_USE_FILE_LOCKING=FALSE
 
 # 1. zenith patch applied? mu_2d exists only after it
 grep -q mu_2d $REPO/models/jax-rrtmgp/rrtmgp/rte/monochromatic_two_stream.py \

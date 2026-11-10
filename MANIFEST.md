@@ -18,7 +18,7 @@ Where that seam already exists, it is deliberate and worth preserving:
 |---|---|---|
 | aerosol IC/BC source | `AER_SRC=mam4\|carma` | real, both paths run |
 | microphysics engine | `driver_fast.py` monkeypatches `tomas_jax.fast` into `coupling.py` at import instead of branching inside it | real, and why the driver is a separate file |
-| radiation | `RAD=0` drops it and the `jax-rrtmgp` dependency entirely | on/off only |
+| radiation | `RAD=0` drops it and the `jax-rrtmgp` dependency entirely; `RAD_ENGINE=rrtmgp\|emulator` (2026-10-13) picks what solves the evolved call, `RAD_REF_CACHE` serves the archive-only half of the stage from disk | real: both engines run, same call sites |
 | meteorology | none — the reader expects the CESM `h1` layout and variable names | a new source is work, not configuration |
 
 ## Layout
@@ -38,16 +38,64 @@ src/driver_fast.py          THE production entry point. Imports coupling.py and 
                             microphysics engine (replacing coupling's per-cell chain) and
                             fct_lr advection. Separate file, not a flag, because the fast
                             engine has its own API and is hard-fixed at 40 bins.
+                            MICRO_ENGINE=fast|emulator picks which batched engine fills
+                            that seam (2026-10-09); MICRO_REF=<other> runs both and logs
+                            the per-step comparison (the run advances with MICRO_ENGINE).
 src/advection/fct_core.py   legacy sealed-face advection. NOT on the run path --
                             coupling.py imports fct_lr directly, so standalone and
                             production use the same transport. Kept solely for the
                             bit-identical legacy check in scripts/validation/test_conservation.py.
 src/settling/settling.py    gravitational settling; also the canonical wet-droplet
                             sizing (tang_density/wet_size), which radiation.py imports
-src/radiation/radiation.py  RRTMGP + Mie optics
-src/advection/fct_lr.py     Lin-Rood flux-form advection (the production scheme)
+src/radiation/radiation.py  RRTMGP + Mie optics (RAD_ENGINE=rrtmgp, the default)
+src/radiation/rad_cache.py  per-archive-hour cache of the reference-aerosol solve and the
+                            clear-sky fields (RAD_REF_CACHE; bit-identical on a hit).
+                            rad_cache_build.py fills entries; scripts/radiation/build_ref_cache.py
+                            batch-builds them
+src/radiation/rad_emulator.py  RAD_ENGINE=emulator: two column networks (Planck response to
+                            dT_rad, aerosol heating) on the cached clear sky, replacing the
+                            two-stream solve of the EVOLVED call; Mie optics, AOD, archive
+                            reads unchanged. rad_features.py is the one feature definition
+                            shared with the label writer. docs/RADIATION.md
+src/advection/ffsl_lr.py    the default ADV_SCHEME (=ffsl) since 2026-10-15, NO LONGER
+                            RECOMMENDED (2026-11-05): fct_lr at large Courant number --
+                            Lin & Rood's flux-form semi-Lagrangian extension of both
+                            horizontal sweeps (whole upwind cells + a PPM sliver),
+                            ADV_FFSL_K sub-steps, fct_lr's vertical remap, faces, budgets
+                            and limiter imported. Its sliver measure was wrong at the cap
+                            edge until 2026-11-05 (ADV_FFSL_FRAC=cell; now `exact`, and
+                            `face` is fct_lr bit for bit at |c| < 1): it did not converge
+                            to lr, the one-year gap was -4.6 % mass / +5 % forcing, and
+                            against CESM's own CH4 it was 4.6x lr's error (fixed: 3.0x at
+                            K=24, 1.2x at K=96 where it costs as much as lr).
+                            docs/PROCESSES.md 1.9-1.10
+src/advection/fct_lr.py     Lin-Rood flux-form advection at CFL sub-steps (ADV_SCHEME=lr: the
+                            production scheme until 2026-10-15, byte for byte unchanged, and
+                            the reference the budgets are measured against)
 src/advection/fct_fast.py   PPM/Zalesak primitives that fct_lr imports
+src/advection/sl_lr.py      semi-Lagrangian advection, ADV_SCHEME=sl (2026-10-13), THE
+                            RECOMMENDED TRANSPORT since 2026-11-05: the SPLIT operator --
+                            SL horizontal remap per level (K sub-steps, per-level mass
+                            fixer, Jacobian air mass + remainder sweep) + fct_lr's own
+                            flux-form vertical sweep on open faces (ADV_SL_VERT=flux);
+                            lr's boundary physics, B_vf and residual unchanged. advect
+                            0.5 s/step vs 1.5 (ffsl) / 7.0 (lr). Against CESM's own
+                            transported CH4 over a year it is the MOST ACCURATE scheme in
+                            the tree: 0.87x lr's RMSE at K=6, 0.75x at K=12 (lr itself is
+                            biased high at 40-75 hPa). docs/PROCESSES.md 1.8, 1.10
+src/advection/sl_core.py    the SL kernels: dinosaur's semi_lagrangian module (Google
+                            NeuralGCM, Apache 2.0) vendored without its dependencies and
+                            patched to accept rows AT the poles (the CESM grid)
 src/microphysics/tomas_fast.py  the tomas_jax.fast adapter (coupling state <-> FastState)
+src/microphysics/tomas_emulator.py  the learned-6h-operator adapter (coupling state <-> the
+                            bin-token transformer's log-state); MICRO_ENGINE=emulator. docs/EMULATOR.md
+src/microphysics/micro_bench.py  in-loop engine A/B: MICRO_REF=<engine> runs it on the same
+                            input, compares, writes micro_bench_<TAG>.npz; the run is unchanged
+src/microphysics/micro_sampler.py  MICRO_SAMPLE_EVERY=N: stratified samples of the engine's input
+                            (training data for the emulator; scripts/emulator/ labels and trains)
+scripts/emulator/           label_chains.py (sampled cells -> 48 h physics chains) and
+                            finetune_bintf.py (fine-tune the emulator on them). Refuted as a
+                            lever on 2026-10-13 (docs/EMULATOR.md); kept for the record
 inputs/rad_data/            palmer_williams_h2so4.dat (Palmer & Williams 1975,
                             as distributed in HITRAN Aerosols-2016)
 src/run_prod.py             the production launcher (self-documenting header)
@@ -171,7 +219,12 @@ a full step. Full-physics cost, measured over a complete 1-year run
 (`runs/prod1yr/`, 2026-08-28): **34.9 s/step** — micro 16.5 s (47%), radiation
 9.4 s (27%), advection 7.4 s (21%), rest 1.7 s — and **flat over the year**
 (quarter means 35.8/34.1/35.5/34.2 s, no stage drifting >15%). Burden growth does
-not make steps more expensive. The 340–370 s/step and "microphysics ~94%" figures
+not make steps more expensive. With the radiation reference cache on (default since 2026-10-13) the
+radiation stage is one solve, 3.1 s/step on a quiet GPU; with
+`RAD_ENGINE=emulator` (2026-10-13): the radiation stage is 0.7 s/step (30-day
+A/B `runs/bench_rademu30d_v2phys`, MEASURED; 3.8 s on the first pass through a
+set of archive hours in `RAD_EMU_ANOM=net`, while the per-hour network reference
+is still being stored) -- `docs/RADIATION.md`. The 340–370 s/step and "microphysics ~94%" figures
 that this repo carried until 2026-08-28 described the pre-2026-08-13 tomas-jax
 engine and are superseded. Per-step cost tracks `nsub`, so quote the per-substep figure. As a check on
 the mode itself, `N/N0` finished at 0.9998 over 8 steps of pure advection, matching
@@ -210,6 +263,22 @@ no submodules), exit non-zero on failure, and run in CI on every push:
 # advection conservation (the LR benchmark)
 python3 $REPO/scripts/validation/test_conservation.py
 
+# semi-Lagrangian transport (ADV_SCHEME=sl): pole halo, constant field,
+# Williamson case 1 over the poles, mass-fixer closure, bin consistency, driver
+python3 $REPO/scripts/validation/test_sl_transport.py
+# which horizontal operator is nearer the truth (analytic cases, GPU, ~1 min):
+# SL K=6 beats lr 2-12x in L2; more SL sub-steps = more smoothing (K=24 worse)
+CUDA_VISIBLE_DEVICES=4 python3 $REPO/scripts/validation/compare_hz_operators.py
+# the same on a closed-column 3-D DIVERGENT reversing flow (exact = initial):
+# the split (Strang K=6) is at or ahead of lr, so the coupled-run gap is the
+# open bottom face, not the operators (KDEF=2|5 sets the deformation strength)
+CUDA_VISIBLE_DEVICES=4 python3 $REPO/scripts/validation/compare_3d_operators.py
+
+# lr at large Courant number (ADV_SCHEME=ffsl): sweep == fct_lr at |c| < 1,
+# conservation/uniform field at |c| up to 8, exact whole-cell shifts, the 3-D
+# driver's budget closure, Williamson 1 at hourly sub-steps vs lr (CPU, ~100 s)
+python3 $REPO/scripts/validation/test_ffsl_transport.py
+
 # closed-form settling physics: Tang density, wet growth factor, fall speed,
 # and that the implicit sweep changes the burden only by its bottom outflow
 python3 $REPO/scripts/validation/test_physics_math.py
@@ -225,6 +294,31 @@ STATE=path/to/coupled_state_<tag>_ckpt.npz python3 $REPO/scripts/validation/floo
 
 # the ADV_VPOS positivity limiter: positivity, conservation, smooth-field inactivity
 python3 $REPO/scripts/validation/validate_vpos_f32.py
+
+# any runs' burdens, r_eff, AOD and TOA forcing against a reference run (how the
+# microphysics emulator is benchmarked over a month; docs/EMULATOR.md)
+python3 $REPO/scripts/validation/compare_runs.py <REF_TAG> <TAG>... --out <name>
+
+# the one-page figure of the production emulator vs the physics over 30 days
+# (outputs/emulator_bench/emulator_summary.png)
+python3 $REPO/scripts/validation/plot_emulator_summary.py
+
+# cost of dinosaur's semi-Lagrangian transport at this model's size, GPU (the
+# offline number behind ADV_SCHEME=sl) -- docs/TRANSPORT_SL_HANDOFF.md
+PYTHONPATH=/data/dinosaur-sl python3 $REPO/scripts/validation/bench_sl_transport.py
+
+# where one radiation call spends its time (solve vs optics vs prep), GPU + CESM
+# archive; docs/RADIATION_EMULATOR_SCOPE.md
+CUDA_VISIBLE_DEVICES=<free> python3 $REPO/scripts/validation/bench_radiation_split.py
+
+# radiation reference cache: a served hour is bit-identical to a computed one, the
+# SW/LW-split solve equals the default one; GPU + archive (docs/RADIATION.md)
+CUDA_VISIBLE_DEVICES=<free> python3 $REPO/scripts/radiation/test_rad_cache.py
+# radiation emulator adapter: contract, structural zeros, both anomaly modes, timing
+# and (with real checkpoints) the offline error vs the physics on the day-30 state
+CUDA_VISIBLE_DEVICES=<free> P_LO_HPA=1 P_HI_HPA=150 INIT_BIN=so4 python3 $REPO/scripts/radiation/test_rad_emulator.py
+# why the Planck term is a network and not a Jacobian (WENO5 face temperatures)
+CUDA_VISIBLE_DEVICES=<free> P_LO_HPA=1 P_HI_HPA=150 INIT_BIN=so4 python3 $REPO/scripts/radiation/check_planck_jacobian.py
 ```
 
 **A change to advection confirmed only in float64 is not confirmed.** Two bugs
@@ -306,6 +400,13 @@ where `validate_radiation.py` drops its figure.
   steady state (the sink is not burden-proportional, loss ~ M^0.35).
 - `RAD_MODE=anomaly` baseline is **time-varying** under `AER_SRC=mam4`, so reported
   forcing is a difference against a moving target.
+- Under `RAD_ENGINE=emulator`, the reported TOA forcing is only trustworthy with
+  `RAD_EMU_ARF=exact` (the default when `RAD_REF=rrtmgp`): the networks' ±1 %
+  bias on the aerosol's TOA effect is 10–30 % of the forcing early in a run. The
+  prognostic `dT_rad` is the emulator's; its 30-day error against the physics is
+  in `docs/RADIATION.md`. The networks' outputs are clamped (`RAD_EMU_CLIP`,
+  20 K/day, logged when it triggers): a residual MLP can blow up on an input
+  far outside its training set, and one did (674 K/day, NaN two steps later).
 - No wet removal anywhere; settling and transport out of the band are the only
   sinks, so aerosol settling into the 100–150 hPa layer lingers.
 - `AOD550` is stratospheric-only and sulfate-only over the band. It is
@@ -313,3 +414,17 @@ where `validate_radiation.py` drops its figure.
   absolute forcing.
 - The budget printout closes to roundoff (`sum` vs `M/M0-1`). If a change breaks
   that closure, the change is wrong — that line is the model's own audit.
+- `ADV_SCHEME=sl` is **opt-in** (2026-10-13). Its default form is the split
+  operator (`ADV_SL_VERT=flux`: SL horizontal + `fct_lr`'s flux-form vertical on
+  open faces), advect 0.38 s vs 6.6 s, boundary physics and diagnostics as under
+  `lr`. 30-day A/B against `fct_lr` (docs/PROCESSES.md §1.8): burdens within
+  ~1 % to day 10; at day 30 mass −2 %, AOD −1.6 %, TOA forcing +7 %, from a
+  20 % larger bottom-face export (a physical difference between the two
+  horizontal operators, budgets close to roundoff). Superseded: its one-year run
+  drifts a few %/year (mass −2.2 % at day 138, growing), and `ADV_SCHEME=ffsl`
+  K = 24 -- `fct_lr` itself at large Courant number, within 0.2 % of `lr` on the
+  30-day budgets at 1.5 s/step -- became the production default on 2026-10-15
+  (docs/PROCESSES.md §1.9). The
+  handoff's closed-column design (`ADV_SL_VERT=sl`) FAILED its A/B — at day 30
+  mass/SO2/AOD 9–15 % low, entirely from the Dirichlet edge-level reset being
+  ~3× the flux-face exchange — and is kept only for the record.

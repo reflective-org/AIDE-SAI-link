@@ -12,10 +12,14 @@ AIDE-SAI-link/
     coupling.py      the orchestrator: forcing, IC/BC, budget, main()
     driver_fast.py   production entry point (swaps in the fast engines)
     run_prod.py      the launcher
-    advection/       fct_lr.py (production), fct_fast.py, fct_core.py (legacy)
+    advection/       ffsl_lr.py (production, ADV_SCHEME=ffsl, 2026-10-15), fct_lr.py (its
+                     sweeps; ADV_SCHEME=lr, the previous default), sl_lr.py + sl_core.py
+                     (ADV_SCHEME=sl, opt-in), fct_fast.py, fct_core.py (legacy)
     radiation/       radiation.py -- Mie + RRTMGP -> heating, AOD, ARF
     settling/        settling.py -- closed-form gravitational settling
     microphysics/    tomas_fast.py -- the tomas_jax.fast adapter
+                     tomas_emulator.py -- the learned-operator adapter (MICRO_ENGINE=emulator)
+                     micro_bench.py -- in-loop engine A/B (MICRO_REF)
   scripts/         everything that reads a run rather than producing one
     validation/      physics validation harnesses
     utils/           plot_run.py, gif_run.py -- the post-run figures

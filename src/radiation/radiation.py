@@ -48,6 +48,8 @@ for _env, _name in (('TOMAS_JAX_PATH', 'tomas-jax'), ('RRTMGP_PATH', 'jax-rrtmgp
                 sys.path.insert(0, _cand)
             break
 
+import functools
+import hashlib
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -482,6 +484,18 @@ class RadiationDriver:
             ))
         # dz only feeds cloud paths; we are clear-sky, so any scalar works (for LWP/IWP calcs).
         self.rt = rrtmgp_lib.RRTMGP(cfg, dz=500.0)
+        self.cfg = cfg
+        self.g_lw, self.g_sw = g_lw, g_sw
+        # A second RRTMGP instance that ALSO returns the SW/LW split of the
+        # heating rate, built lazily: only the emulator's label writer and the
+        # reference-cache builder ask for it (heating(..., split=True)). Same
+        # solve, same numbers -- the flag only adds output keys -- but it is a
+        # separate jit, so the default path's compiled graph is untouched.
+        self._rt_split = None
+        self._jit_hr_split = None
+        # rad_cache.RefCache of the archive-only fields (set by coupling.py when
+        # RAD_REF_CACHE is on); None = always compute. See rad_cache.py.
+        self.ref_cache = None
         self.nb_sw = self.rt.optics_lib.gas_optics_sw.n_bnd
         self.nb_lw = self.rt.optics_lib.gas_optics_lw.n_bnd
 
@@ -523,6 +537,8 @@ class RadiationDriver:
                   "underestimates extinction ~47%; set WET_OPTICS=1)", flush=True)
 
         self._jit_hr = jax.jit(self._hr_impl)
+        self.nbins = int(np.asarray(self.mie_sw['sigma_ext']).shape[-2])
+        self.nzb = len(self.klevs)
 
         # ---- multi-GPU: the lat-chunk loop in heating() shards across all
         # visible devices (rrtmgp columns are independent, so this is exact).
@@ -593,8 +609,12 @@ class RadiationDriver:
         pad = jnp.zeros(full.shape[:-1] + (1,), prop.dtype)
         return jnp.concatenate([pad, full, pad], axis=-1)
 
-    def _hr_impl(self, T, q, o3, ch4, ts, alb, zen, aer_sw, aer_lw):
-        """One rrtmgp call on already-chunked (x=lat rows) xyz fields."""
+    def _hr_impl(self, T, q, o3, ch4, ts, alb, zen, aer_sw, aer_lw, split=False):
+        """One rrtmgp call on already-chunked (x=lat rows) xyz fields.
+
+        split=True (label writer / cache builder only) runs the SAME solve on
+        the split-output RRTMGP instance and returns (hr, diags, hr_sw)."""
+        rt = self._rt_split if split else self.rt
         p = self._p_xyz_chunk(T.shape[0])
         rho = p / (rrtmgp_constants.R_D * T)
         zero = jnp.zeros_like(T)
@@ -603,7 +623,7 @@ class RadiationDriver:
         n2o = jnp.full_like(T, N2O_PPB * 1e-9)
         #this is the core RRTMGP call
         #5 zero arrays for cloud fields and empty dict for cloud optics
-        out = self.rt.compute_heating_rate(
+        out = rt.compute_heating_rate(
             rho, q, zero, zero, zero, zero, zero, T, ts, p, {},
             zenith=zen, irrad=TSI_DEFAULT, sfc_alb=alb, sfc_emis=SFC_EMIS,
             vmr_fields={'o3': o3, 'ch4': ch4, 'co2': co2, 'n2o': n2o},
@@ -619,6 +639,8 @@ class RadiationDriver:
                            out['sw_flux_down_full'][..., 0],    # sfc SW down
                            out['lw_flux_down_full'][..., 0]])   # sfc LW down
         #return the heating rate and diagnosti fluxes 
+        if split:
+            return hr, diags, out['rad_heat_sw_3d']
         return hr, diags
 
     def _wt_field(self, T_band, q_band):
@@ -658,7 +680,14 @@ class RadiationDriver:
         return jnp.clip(px, 1.006, 1.09e5)
 
     # ------------------------------------------------------------------
-    def heating(self, t, num_band, T_band_override=None):
+    def _ensure_split(self):
+        if self._rt_split is None:
+            import dataclasses
+            cfg = dataclasses.replace(self.cfg, save_lw_sw_heating_rates=True)
+            self._rt_split = rrtmgp_lib.RRTMGP(cfg, dz=500.0)
+            self._jit_hr_split = jax.jit(functools.partial(self._hr_impl, split=True))
+
+    def heating(self, t, num_band, T_band_override=None, split=False):
         """Heating rate for absolute hour index t with aerosol num_band.
 
         num_band : (NBINS, nzb, nlat, nlon) [#/kg] on the coupled band levels
@@ -666,7 +695,13 @@ class RadiationDriver:
                           band levels (T_eff = T_CESM + dT for the perturbed call)
         Returns hr_band (nzb, nlat, nlon) [K/s] in CESM level order, and a
         diag dict (TOA/sfc fluxes, band AOD at 550 nm).
+        num_band=None is the zero-aerosol (clear-sky) call. split=True adds
+        diag['hr_sw_band'], the shortwave part of hr_band (same solve).
         """
+        if num_band is None:
+            num_band = jnp.zeros((self.nbins, self.nzb, self.nlat, self.nlon))
+        if split:
+            self._ensure_split()
         T = self._read3d(self.dT, 'T', t).astype(np.float64)
         #replaces the temperature on the coupled band levels to emulate the aerosol direct effect on heating rate (T_eff = T_CESM + dT)
         if T_band_override is not None:
@@ -687,7 +722,7 @@ class RadiationDriver:
 
         # aerosol optics are computed PER lat-chunk: the full-globe per-band
         # fields are ~3 GB and were the OOM driver on memory-tight GPUs.
-        hr_rows, dg_rows, aod_rows = [], [], []
+        hr_rows, dg_rows, aod_rows, sw_rows = [], [], [], []
         C = RAD_LAT_CHUNK
         num_j = jnp.asarray(num_band)
         # per-cell composition -> interpolation weights over WT_GRID. Built from
@@ -728,9 +763,13 @@ class RadiationDriver:
             #converts the aerosol optical properties to bottom-up xyz coordinates with zero halos
             aer_sw = tuple(self._band_to_xyz(v) for v in (tau_s, ssa_s, g_s))
             aer_lw = tuple(self._band_to_xyz(v) for v in (tau_l, ssa_l, g_l))
-            hr, dg = self._jit_hr(
-                put(Tx[a:b]), put(qx[a:b]), put(o3x[a:b]), put(ch4x[a:b]),
-                put(tsj[a:b]), put(albj[a:b]), put(zenj[a:b]), aer_sw, aer_lw)
+            _args = (put(Tx[a:b]), put(qx[a:b]), put(o3x[a:b]), put(ch4x[a:b]),
+                     put(tsj[a:b]), put(albj[a:b]), put(zenj[a:b]), aer_sw, aer_lw)
+            if split:
+                hr, dg, hsw = self._jit_hr_split(*_args)
+                sw_rows.append(hsw)
+            else:
+                hr, dg = self._jit_hr(*_args)
             #550 nm AOD
             if self.wet_optics:
                 aod_rows.append(_aod550_wet(nc, dp_d, self._sig550_dev[k], ww))
@@ -753,23 +792,88 @@ class RadiationDriver:
         #creates a dictionary mapping diagnostic names to their corresponding arrays
         diag = {n: diags[i] for i, n in enumerate(dnames)}
         diag['aod550'] = aod550
+        if split:
+            hsw = jnp.concatenate([jax.device_put(x, d0) for x in sw_rows], axis=0)
+            diag['hr_sw_band'] = jnp.moveaxis(hsw[..., 1:-1][..., ::-1], -1, 0)[self.band_pos]
         #returns the heating rate for the coupled band levels and a dictionary of diagnostic fluxes and AOD
         return hr_band, diag
 
-    def heating_anomaly(self, t, num_evolved, num_ref, dT_band):
+    def heating_anomaly(self, t, num_evolved, num_ref, dT_band, T_band=None):
         """(HR(evolved bins, T_CESM+dT) - HR(reference bins, T_CESM)) [K/s].
 
         The perturbed call sees T_eff so LW cooling responds to accumulated
         warming (negative Planck feedback bounds dT); the reference call is
         pure CESM. Returns (hr_anom, diag_perturbed, diag_reference).
+        T_band (nzb, nlat, nlon), optional: the band temperature of BOTH calls
+        in place of the archive's (coupling.py MET_SRC=file); the reference
+        call then depends on it and bypasses the per-hour cache.
         """
         #CESM temp on just aerosol levels
-        T_cesm_band = self._read3d(self.dT, 'T', t)[self.band_pos]
+        T_cesm_band = (self._read3d(self.dT, 'T', t)[self.band_pos] if T_band is None
+                       else np.asarray(T_band, np.float64))
         #evolved tomas bins and temperature 
         #dt_rad contains the accumulated warming from all previous steps
         hr1, d1 = self.heating(t, num_evolved,
                                T_band_override=T_cesm_band + np.asarray(dT_band))
-        #background reference bins and pure CESM temperature
-        hr0, d0 = self.heating(t, num_ref)
+        #background reference bins and pure CESM temperature (cached when possible)
+        hr0, d0 = self.reference(t, num_ref, T_band=T_band)
         #heating rate anomoly
         return hr1 - hr0, d1, d0
+
+    # ------------------------------------------------------------------
+    # the archive-only reference call and its cache (rad_cache.py)
+    # ------------------------------------------------------------------
+    def ref_ready(self, t):
+        """True when hour t's reference solve can be served without num_ref
+        (so the caller may skip re-binning the reference aerosol)."""
+        return self.ref_cache is not None and self.ref_cache.has(t)
+
+    def reference(self, t, num_ref, T_band=None):
+        """(hr0, d0) = heating(t, num_ref) -- served from the cache when the
+        hour is stored (float64 on disk, so bit-identical to computing it),
+        else computed and, if a cache is attached, stored. num_ref may be
+        None only on a hit. With T_band (a band temperature that is not the
+        archive's) the solve is computed with it and the cache is not touched."""
+        import rad_cache
+        if T_band is not None:
+            if num_ref is None:
+                raise RuntimeError('radiation: a reference solve at a non-archive '
+                                   'temperature needs the reference aerosol')
+            return self.heating(t, num_ref, T_band_override=np.asarray(T_band, np.float64))
+        c = self.ref_cache
+        if c is not None:
+            e = c.get(t)
+            if e is not None:
+                d0 = {n: jnp.asarray(v) for n, v in
+                      rad_cache.arrays_to_diag('d0', e).items()}
+                return jnp.asarray(e['hr0']), d0
+        if num_ref is None:
+            raise RuntimeError(f'radiation: hour {t} is not in the reference '
+                               f'cache and no reference aerosol was given')
+        hr0, d0 = self.heating(t, num_ref)
+        if c is not None:
+            c.put(t, hr0=np.asarray(hr0, np.float64),
+                  **rad_cache.diag_to_arrays('d0', d0, np.float64))
+        return hr0, d0
+
+    def cache_key(self, **ref_src):
+        """Everything that determines heating(t, num_ref(t)): the archive, the
+        column, the optics tables and flags, the gases, the reference-aerosol
+        source (passed in by the caller) and the solver commit."""
+        import rad_cache
+        with open(RI_FILE, 'rb') as f:
+            ri_hash = hashlib.sha1(f.read()).hexdigest()[:12]
+        key = dict(
+            archive=os.path.basename(str(self.dT.encoding.get('source', ''))),
+            klevs=[int(k) for k in self.klevs], krad=[int(self.krad[0]), int(self.krad[-1])],
+            nlat=int(self.nlat), nlon=int(self.nlon),
+            wet_optics=bool(self.wet_optics), wt_grid=[float(w) for w in WT_GRID],
+            n_quad_wl=N_QUAD_WL, ri_file=ri_hash, nbins=int(self.nbins),
+            dp_wet_hash=hashlib.sha1(np.ascontiguousarray(
+                np.asarray(self.dp_wet if self.wet_optics else self.mie_sw['sigma_ext']),
+                dtype=np.float64).tobytes()).hexdigest()[:12],
+            g_lw=self.g_lw, g_sw=self.g_sw, co2_ppm=CO2_PPM, n2o_ppb=N2O_PPB,
+            sfc_emis=SFC_EMIS, alb_fallback=ALB_FALLBACK, tsi=TSI_DEFAULT,
+            rrtmgp_commit=rad_cache._submodule_commit(_paths.REPO_ROOT, 'jax-rrtmgp'),
+            ref_src=ref_src)
+        return key

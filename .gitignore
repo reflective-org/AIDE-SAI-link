@@ -254,3 +254,9 @@ runs/*
 !runs/README.md
 outputs/*
 !outputs/README.md
+
+# per-archive-hour radiation reference cache (src/radiation/rad_cache.py): ~24 MB
+# per hour, rebuilt on demand; never history
+inputs/cache/
+# radiation emulator weights (scripts/radiation/train_rad_mlp.py): artifacts, ~70 MB
+inputs/rad_emulator/

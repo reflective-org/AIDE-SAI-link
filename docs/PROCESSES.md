@@ -24,7 +24,7 @@ placed where they are for a stated reason, noted in the code at each one.
 |---|---|---|---|
 | 0 | SAI source — continuous SO2 (and optional H2SO4) into the injection cells | `INJ_SO2_TG_YR=0` | — |
 | 1 | **Transport** — all 82 tracers advected on shared winds | — | `advect` |
-| 2 | **Microphysics** — SO2 chemistry, nucleation, coagulation, condensation | `MICRO=off` | `micro` |
+| 2 | **Microphysics** — SO2 chemistry, nucleation, coagulation, condensation (`MICRO_ENGINE=fast`, the `tomas_jax.fast` physics, or `emulator`, the learned 6 h operator — `docs/EMULATOR.md`) | `MICRO=off` | `micro` |
 | 2b | **Settling** — implicit upwind column sweep, the one true aerosol sink | `SETTLE=0` | `settle` |
 | 3 | Vertical BC — refill the edge slabs from the MAM4 reservoir | — | `bc+polar` |
 | 4 | Polar-cap refresh — freeze the target for the *next* step's advection | — | `bc+polar` |
@@ -108,8 +108,10 @@ exact, not an approximation.
 
 ## 1.2 Scheme: Lin-Rood flux form
 
-`src/advection/fct_lr.py`. PPM reconstruction, Zalesak limiter, dimensionally
-split (x, y, z sweeps), CFL 0.5, f32.
+`src/advection/fct_lr.py` (`ADV_SCHEME=lr`; since 2026-10-15 production runs
+its large-Courant form `ffsl_lr.py`, §1.9, which imports these sweeps). PPM
+reconstruction, Zalesak limiter, dimensionally split (x, y, z sweeps), CFL 0.5,
+f32.
 
 The predecessor (`fct_fast.py`) used the **advective form**: flux divergence plus
 a `+q*div(c)` correction. That form is *consistent* — a constant field is
@@ -309,7 +311,546 @@ outflow. Both are negative. Top-face export (3%) is real — the plume spreads
 upward into 13-20 hPa. These are NET per-face globally summed values and cannot
 separate gross inflow from gross outflow.
 
+## 1.8 Semi-Lagrangian alternative (`ADV_SCHEME=sl`, 2026-10-13)
+
+**The operator as it stands (`ADV_SL_VERT=flux ADV_SL_SPLIT=strang`, the
+defaults since 2026-10-14): lr with its two CFL-limited horizontal sweeps
+replaced by one semi-Lagrangian remap, Strang-composed with lr's vertical
+sweep.** Per sub-step (K = `ADV_SL_K` = 6, one per hourly CESM wind):
+(1) `fct_lr._lr_vert` on every column for HALF the sub-step — the production
+flux-form PPM vertical remap with its open faces, reservoir inflow, positivity
+limiter and reported face fluxes — in advective form `(ρq)'/ρ'` with the air
+mass ρ carried; (2) 2-D departure points per level, cubic gather with the
+quasi-monotone limiter, and a per-(tracer, level) mass fixer whose target is
+Σ ac·ρ·q with ρ advanced by the Jacobian of the departure map (the
+Lagrangian air-mass ratio, second order like the departure points;
+`ADV_SL_JAC=1`) — each level is a closed sphere, so the target is exact;
+(3) the second half vertical sweep from that ρ, after which the O(dt²)
+bookkeeping remainder `ρ − 1` is sent through the column's own faces at the
+local upwind mixing ratio (`_remainder_sweep`), so the air mass is exactly 1
+again, a uniform field stays uniform and `dM = f_top − f_bot` holds without a
+fixer (the global column fixer remains as a roundoff closure); (4) the polar caps stirred with `fct_fast._mix_caps`
+(`ADV_POLAR=zonal`). The 2026-10-13 composition (horizontal then vertical, air
+mass frozen at 1) is `ADV_SL_SPLIT=lie`, first order at the open face; see
+"the open-face defect" below for why it was replaced. Face omega is
+`lr`'s continuity derivation (`ADV_SL_OMEGA=cont`). Consequences: `ADV_WCONT=1`,
+`BC_EDGE=open`, `BC_BOT_AER`, `B_vf_in/out` and the "advection numerical
+residual" all mean exactly what they mean under `lr` (the residual is at
+roundoff by construction, 1e-16 in the 1-day run). In-loop: `advect` 0.38 s
+per step vs 6.6 s; the hourly wind reads add ~1 s to `read`. Day 1 against
+`bench_phys30d`: mass, SO2, H2SO4 and AOD within 0.1 %, number +3.4 %.
+
+**30-day A/B of the split operator (2026-10-13, `runs/slsplit30d_K6`,
+`slsplit30d_K2`, `slsplit30d_K6loc` vs `runs/bench_phys30d`, physics
+microphysics, same injection scenario;
+`outputs/emulator_bench/compare_slsplit_ab30d.png`), day 30 relative to `lr`:**
+
+| run | number | mass | SO2 | r_eff | AOD 550 | TOA forcing | H2SO4(g) | bottom-face export /M0 |
+|---|---|---|---|---|---|---|---|---|
+| lr (reference) | — | — | — | — | — | — | — | −0.085 |
+| split K=6, global fixer | +0.9 % | −2.1 % | +0.9 % | −3.8 % | −1.6 % | +7.2 % | +8.5 % | −0.103 |
+| split K=2, global | +0.7 % | −3.2 % | +0.7 % | −4.2 % | −2.0 % | +10.2 % | +8.1 % | −0.118 |
+| split K=6, local fixer | +3.5 % | −2.7 % | +0.5 % | −4.9 % | −1.9 % | +6.1 % | +8.7 % | −0.117 |
+
+Days 1–10 are within ~1 % on every burden. The whole day-30 difference is
+again in the slab-face term, but now a modest one — and, as the one-year pair
+showed a day later, NOT a physical one (see "the open-face defect" below): the
+split exports 20–40 % more aerosol through the bottom face than `lr` (both
+budget to roundoff; `micro` +0.48 vs +0.49, `settle` −0.028 vs −0.027). The
+two horizontal operators place the plume's lower edge differently (SL cubic +
+quasi-monotone limiter vs PPM + Zalesak with ~200 sub-steps), and the
+bottom-face flux is what that edge sees. K = 6 with the global fixer is the
+best configuration; the local fixer buys nothing here. The mass gap grows
+linearly after day 10 (−0.4 % at day 10, −1.3 % at 20, −2.1 % at 30), i.e. it
+has NOT saturated in 30 days; the TOA-forcing gap sits at +7 % from day 10 on
+and does not grow (it tracks r_eff, not burden). Under continuous injection
+the burden ratio must saturate at the ratio of the effective removal rates;
+the one-year pair `runs/lr1yr`, `runs/slsplit1yr_K6` (and `_K24`) measures
+where (launched 2026-10-14).
+
+**Which scheme is nearer the truth (2026-10-14).** Four 30-day diagnostics
+(`runs/lrdiag30d_cfl025`, `sldiag30d_K6brack`, `sldiag30d_K12`,
+`sldiag30d_K24`), day 30 relative to the production `lr` run:
+
+| run | mass | cumul. bottom export | number | AOD | TOA forcing |
+|---|---|---|---|---|---|
+| lr at CFL 0.25 | +0.06 % | −0.0 % | −0.0 % | +0.07 % | −0.3 % |
+| split K=6, hourly winds | −2.10 % | −21.5 % | +0.9 % | −1.6 % | +7.2 % |
+| split K=6, bracketing winds (lr's input) | −1.92 % | −19.0 % | −1.9 % | −1.0 % | +4.1 % |
+| split K=12 | −1.99 % | −18.6 % | +0.8 % | −1.6 % | +7.2 % |
+| split K=24 | −1.94 % | −17.2 % | +0.8 % | −1.6 % | +7.2 % |
+
+`lr` is converged in its own sub-stepping (halving the CFL moves nothing).
+The split moves toward `lr` as K grows (export excess 21.5 → 18.6 → 17.2 %;
+with the Lie composition, partly because its face error is first order in the
+sub-step, below) and the hourly winds account for ~2.5 points. But "toward lr"
+is NOT "toward the truth": `scripts/validation/compare_hz_operators.py` runs
+both production entry points (w = 0, caps at 80°, f32, 6 h steps) on analytic
+cases, 12 days, L2 error and surviving peak (1 = exact):
+
+| case | lr (CFL 0.5) | split K=6 | split K=24 |
+|---|---|---|---|
+| Williamson 1, solid body along the equator | 0.019 / 0.970 | **0.0015 / 0.9985** | 0.062 / 0.909 |
+| Williamson 1, axis tilted 45° | 0.013 / 0.966 | **0.0125 / 0.976** | 0.036 / 0.947 |
+| Nair–Lauritzen 4, deformational, reversing | 0.132 / 0.777 | **0.058 / 0.915** | 0.232 / 0.664 |
+
+SL at K = 6 is 2–12× more accurate than `lr` and keeps the peak; `lr`'s 70–250
+PPM sub-steps per 6 h are the diffusive scheme. More SL sub-steps make it
+WORSE (every gather smooths), which is why K = 24 "converges toward lr": it
+converges toward lr's diffusion. So the 20 % export spread is dominated by
+`lr`'s numerical diffusion of the plume's lower edge, and the split is the
+better estimate of the two. K must match the wind cadence (hourly → K = 6),
+never exceed it. `lr` stays the default until the one-year pair and the user's
+call; the 17× cheaper transport is also the more accurate one.
+
+**The open-face defect and the Strang fix (2026-10-14).** The one-year pair
+(`runs/lr1yr`, `runs/slsplit1yr_K6`, Lie composition, 10 Tg/yr continuous
+injection) showed the gap does not saturate while the burden is still
+building — it accelerates — and only levels off once `lr`'s own burden does
+(day ~330, M/M0 ≈ 11; both complete):
+
+| day | mass | cumul. bottom export | settling | AOD | TOA forcing | lr burden M/M0 |
+|---|---|---|---|---|---|---|
+| 30 | −2.1 % | +17 % | −3.5 % | −1.6 % | +7 % | 1.4 |
+| 90 | −5.4 % | +39 % | −7.6 % | −4.8 % | +7 % | 3.4 |
+| 180 | −14.1 % | +62 % | −10.0 % | −13.2 % | +13 % | 6.7 |
+| 270 | −28.6 % | +76 % | −14.3 % | −27.3 % | +28 % | 9.6 |
+| 365 | −37.1 % | +75 % | −17.3 % | −34.6 % | +36 % | 11.1 |
+
+(export excess here against `lr1yr` itself, which differs from
+`bench_phys30d` by the lr run's own sampling of the forcing.) A scheme that
+ends a year 37 % low in burden and 36 % high in forcing is unusable, whatever
+its interior accuracy.
+
+The day-30 per-level mass against `lr` was the clue: every level from 1 to
+50 hPa −22 to −37 %, 88–122 hPa +12 to +22 %, the same in every latitude band
+— a downward redistribution of the whole burden, not a difference at the
+plume's edge. The analytic cases above are non-divergent and could not see it.
+A closed-column 3-D test with a DIVERGENT, time-reversing flow
+(`scripts/validation/compare_3d_operators.py`: Nair–Lauritzen case 3 in the
+horizontal × a zero-mean vertical profile so the column stays closed, uniform
+24 levels 20–143 hPa, 12 days, exact answer = the initial field, `KDEF` =
+deformation strength) puts the split AHEAD of `lr` in the interior:
+
+| composition (K) | L2, KDEF=2 | L2, KDEF=5 |
+|---|---|---|
+| lr (CFL 0.5) | 0.0089 | 0.0250 |
+| Lie, air mass frozen (6) | 0.0067 | 0.0244 |
+| Lie, air mass carried (6) | 0.0068 | — |
+| **Strang (6)** | **0.0064** | **0.0234** |
+| Strang (2) | 0.0070 | — |
+| Strang (24) | 0.0158 | 0.0305 |
+
+So the operators are fine and the whole coupled-run gap is the open bottom
+face. Mechanism: Lie splitting applies a whole sub-step's horizontal
+convergence to the column before the vertical sweep sees any of it, and at
+143 hPa that is `dt·div ≈ 0.3` of the cell's air in one hour. With the air
+mass frozen at 1, the per-level fixer absorbed that as a uniform O(dt·div)
+rescale of the level every sub-step — the spurious transfer that drained the
+upper levels. Carrying the air mass `ρ_h = 1 − dt·div(v)` through the
+horizontal step (`ADV_SL_RHO=1`) puts the fixer at O(dt²) and repairs the
+vertical distribution (mid-levels −3 to −5 % of `lr` instead of −25 to −49 %),
+but the bottom-face flux then rides on ρ ≈ 1.3 for the whole hour: first order
+in the sub-step, and more sub-steps are not available because every SL gather
+smooths. Strang composition (`ADV_SL_SPLIT=strang`: half vertical sweep,
+horizontal remap with ρ carried, half vertical sweep) centres the convergence
+on the vertical motion, which makes the face term second order with still one
+gather per sub-step; vertical sweeps are cheap. 30-day A/B, day 30 relative to
+the production `lr` run (`runs/sldiag30d_K6brack`, `slrho30d_K6`,
+`slrho30d_K24`, `slstrang30d_K6`):
+
+| composition | mass | cumul. bottom export | reservoir inflow | settling | number | AOD | TOA forcing |
+|---|---|---|---|---|---|---|---|
+| Lie, ρ frozen, K=6 (hourly winds) | −2.10 % | +21.5 % | +38 % | +5 % | +0.9 % | −1.6 % | +7.2 % |
+| Lie, ρ frozen, K=6 (bracketing winds) | −1.92 % | +15.1 % | +37 % | −3.5 % | −1.9 % | −1.0 % | +4.1 % |
+| Lie, ρ carried, K=6 | −2.37 % | +37.1 % | +3.8 % | +0.1 % | +3.7 % | −3.1 % | +14.3 % |
+| Lie, ρ carried, K=24 | −0.72 % | +9.9 % | −4.7 % | +0.7 % | +2.6 % | −1.6 % | +7.5 % |
+| Strang, Eulerian air mass, K=6 | −1.15 % | +15.8 % | −11.3 % | +0.0 % | +2.7 % | −1.8 % | +8.2 % |
+| **Strang, Jacobian + remainder sweep, K=6 (default)** | **−0.48 %** | **+7.8 %** | **−16.2 %** | **+0.6 %** | **+2.9 %** | **−1.4 %** | **+6.0 %** |
+
+Under Strang the settling and microphysics terms match `lr` to 0.1 %, the
+reservoir inflow (38 % high under the frozen-ρ split) is now 11–16 % low, and
+the mass gap grows more slowly each decade (−0.41, −0.85, −1.15 % with the
+Eulerian air mass; −0.22, −0.40, −0.48 % with the default, whose export excess
+is flat at 8 % from day 10) instead of faster. The remaining export spread (~16 %, flat from day 10)
+is what the analytic tests attribute to `lr`'s diffusion of the plume's lower
+edge plus the hourly winds (~2.5 points); `runs/slstrang10d_K24` (10 days)
+checks that the face term has converged in K at K=6, and the one-year Strang
+run `runs/slstrang1yr_K6` (launched 2026-10-14, physics microphysics, same
+scenario as `lr1yr`) answers whether the gap saturates. `ADV_SL_SPLIT=strang`
+is the default under `sl`; `ADV_SL_RHO` only affects `lie`. `sl` stays
+opt-in: `ffsl` K = 24 (§1.9) became the production default on 2026-10-15.
+
+**Convergence in K, and the two remaining first-order terms (2026-10-14).**
+Ten-day Strang runs at K = 2, 6, 12, 24 (`runs/slstrang10d_K2`, `_K12`,
+`_K24`; K = 2 blows up — `dt·div ≈ 0.9` at the face puts the air mass on its
+floor — so K ≥ 6 is required, not just preferred): the export excess over `lr`
+at day 10 was 14.7 / 7.9 / 4.5 % at K = 6 / 12 / 24, halving with each
+doubling of K — FIRST order, with Richardson limits of +1 % in export and
+−0.1 % in mass. So in the coupled model the split converges to `lr` at the
+face and `lr` is the converged answer there; the question is only how far
+K = 6 sits from it, because more gathers are not an option. Two sources were
+found, each a local O(dt²) error that a global fixer was spreading uniformly
+every sub-step (which makes it first order over the run): (a) the Eulerian
+air mass `1 − dt·div` is the Lagrangian one to first order only, so the
+per-level fixer still moved ~0.3·(dt·div)² of a level (≈2 % per hour at the
+143 hPa face); the Jacobian of the departure map, `|∂(λ_d, μ_d)/∂(λ, μ)|` by
+central differences in the equal-area coordinates, cuts that load 30× at
+dt = 1 h (`_jacobian`); (b) after the two half sweeps the air mass is 1 only to
+O(dt²), and dividing it out plus the global column fixer again smeared a
+local remainder over the globe; `_remainder_sweep` returns it through the
+column's own faces at the local upwind mixing ratio instead, after which no
+fixer is needed. Both are `ADV_SL_JAC=1` (default). Day 10 relative to `lr`:
+
+| Strang variant | K | mass | cumul. bottom export | reservoir inflow | settling |
+|---|---|---|---|---|---|
+| Eulerian air mass, column fixer | 6 | −0.41 % | +14.7 % | −8.1 % | −0.2 % |
+| Eulerian air mass, column fixer | 12 | −0.26 % | +7.9 % | −8.2 % | +0.0 % |
+| Eulerian air mass, column fixer | 24 | −0.18 % | +4.5 % | −7.9 % | +0.2 % |
+| Jacobian air mass, column fixer | 6 | −0.25 % | +10.0 % | −4.3 % | +0.2 % |
+| Jacobian air mass, column fixer | 24 | −0.15 % | +3.3 % | −6.9 % | +0.3 % |
+| **Jacobian + remainder sweep (default)** | **6** | **−0.22 %** | **+8.4 %** | **−16.5 %** | **+0.1 %** |
+| Jacobian + remainder sweep | 24 | −0.13 % | +2.6 % | −8.1 % | +0.2 % |
+
+(`runs/sljac10d_K6`, `_K24`, `runs/slrem10d_K6`, `_K24`; the Lie split of
+2026-10-13 was +9.6 % at day 10 but +21.5 % by day 30 and accelerating.) The
+K = 6 export excess went 14.7 → 10.0 → 8.4 %; what is left still halves from
+K = 6 to K = 24, so a first-order term of a few percent remains (candidates:
+the PPM half sweeps with the hourly wind held fixed over the sub-step, the
+cap stirring, the time interpolation of the winds that K > 6 implies).
+`advect` is 0.8 s/step with the extra gather and sweep (was 0.5). The
+one-year run was restarted with this default as `runs/slrem1yr_K6`
+(2026-10-14; the Eulerian-Strang one-year `slstrang1yr_K6` was stopped at
+day 98 and is superseded).
+
+**The handoff's original design (`ADV_SL_VERT=sl`), kept for the record.**
+`src/advection/sl_lr.py` on the kernels in `src/advection/sl_core.py`, which
+are dinosaur's `semi_lagrangian` module (Google NeuralGCM, Apache 2.0) vendored
+without its dependencies and with one patch: the CESM grid has rows AT the
+poles, which dinosaur refuses because its cross-pole halo would duplicate the
+pole node; `sl_core` mirrors rows 1..2 instead of 0..1 about a pole row, and the
+pole row stays an ordinary node. The design and its measurements are in
+[TRANSPORT_SL_HANDOFF.md](./TRANSPORT_SL_HANDOFF.md).
+
+**Why.** `fct_lr` is CFL-limited in both horizontal sweeps and the sub-step is
+set by the 24 km longitude spacing at the 80° cap edge: ~180–270 sub-steps and
+6.6 s of a 21 s emulator step. A semi-Lagrangian step has no CFL limit — one
+departure-point solve per level plus one gather per tracer per sub-step,
+whatever the wind — and costs ~49 ms at this problem size (offline, H100,
+`scripts/validation/bench_sl_transport.py`).
+
+**What a step does.** K = `ADV_SL_K` sub-steps (default 6, one per hourly CESM
+wind; `coupling.py` reads the five hourly snapshots between the two step ends
+and `sl_lr` resamples them onto the sub-step nodes). Per sub-step: 3-D
+departure points by two fixed-point iterations on the trajectory midpoint in
+geocentric Cartesian coordinates (no polar singularity; the IFS 48r1
+formulation), with CESM omega at the level centers as the vertical velocity in
+pressure, departure pressures clipped to the center range; then one cubic
+(4×4) × linear (2) Lagrange gather per tracer with the Bermejo–Staniforth
+quasi-monotone limiter (clip to the 2×2×2 bracketing corners: no new extrema,
+positivity preserved); then the mass fixer. After the K sub-steps the polar
+rows (|lat| > 80°) are overwritten from `qfroz`, as `ADV_POLAR=freeze` does.
+
+**Conservation.** Point-wise SL remap is an interpolation, not a flux balance,
+so the column sum is not preserved (the raw operator drifts ~0.5–1 %/6 h on a
+random divergent wind in the unit test; JCM saw 1.3 % over 38 steps). The
+standard remedy (IFS, UM, GEM) is a mass fixer with a *known* target, and the
+target is known because the column is **closed**: nothing enters through the
+end faces (constant extrapolation beyond the end levels), so the target of every
+tracer is its extended-column mass before the sub-step, Σ dp·ac·q, with the
+same dp·ac weight the step log's `M/M0` uses. `ADV_SL_FIXER=global` rescales
+the tracer to it; `local` (Bermejo & Conde 2002, as in the IFS) removes the
+error only from cells where the cubic gather overshoots a linear gather at the
+same departure points in the direction of the error, i.e. where the
+interpolation created the spurious mass, and falls back to the global scaling
+when no cell does (a smooth field). Both hit the target to float64 roundoff:
+the gathers run in float32 but the stack is carried between sub-steps in
+float64 and the sums are float64.
+
+**Boundaries.** Because the column is closed there is no face flux to book, so
+`coupling.py` sets `ADV_WCONT=0` under `sl`: `BC_EDGE=clamp`, the reservoir
+levels and the polar rows are Dirichlet-reset after the step and the exchange
+with the reservoir is what the reset puts in or takes out, booked in `B_bc`
+(`B_vf_in/out` are off — `sl_lr.advect_step_batch` has no `return_vflux`, so
+the `ADV_VFLUX` probe answers False). `BC_BOT_AER` is **not** applied in the
+clamp path (it scales the open-face inflow value), so it is a no-op under `sl`
+at present. Bin consistency: number and mass of a bin are gathered along the
+same trajectories, so their ratio is preserved away from the limiter and the
+fixer; the coupler's two-moment clip repairs the rest and `clipM/M0` reports it.
+
+**Validation.** `scripts/validation/test_sl_transport.py` (CPU, ~30 s, on the
+model's own pole-row grid): constant field preserved to roundoff across the
+poles; Williamson case 1 (cosine bell, solid-body rotation, α = 0° and 90°,
+one revolution in 48 × 6 h) L2 = 2.5 %, max ≤ 1, min ≥ 0; fixer closure
+|M1−M0|/M0 ≤ 1e-15 (global and local) with positivity on a random divergent
+3-D wind; 0 % bin-bound violations on a (N, M) pair; the driver contract.
+
+**30-day A/B of the closed-column design (`ADV_SL_VERT=sl`; 2026-10-13,
+`runs/sl30d_K6`, `sl30d_K1`, `sl30d_K2`, `sl30d_K6loc` vs `runs/bench_phys30d`,
+physics microphysics, same injection scenario;
+`outputs/emulator_bench/compare_sl_ab30d.png`): the gate is NOT met.**
+In-loop, `advect` is 0.35 s/step (median) against 6.6 s, and the hourly wind
+reads add ~1.0 s to the `read` stage. Microphysics (+0.49 M0) and settling
+(−0.025 M0) agree between all five runs to the third digit, but at day 30 the
+SL runs are −9 to −14 % in mass burden, −12 to −15 % in SO2, −7 to −14 % in AOD
+and +25 to +40 % in number burden, growing with K (K=1 closest to `lr`). The
+whole difference is the slab-face term: `lr` exchanges −0.085 M0 through the
+bottom face over 30 days (`B_vf`), the SL runs −0.23 (K=1) to −0.29 (K=6) M0
+through the Dirichlet edge-level reset (`B_bc`). Resetting the whole bottom
+LEVEL every step is a ~3× stronger sink than the flux through its lower FACE
+(and a stronger ultrafine-number source from the aerosol-rich 143 hPa
+reservoir), which is the risk the handoff's §6.2 named. The operator is fine;
+the boundary design is what had to change — which is the split operator
+above (`ADV_SL_VERT=flux`), built the same day.
+
+## 1.9 `lr` at large Courant number (`ADV_SCHEME=ffsl`, 2026-10-14)
+
+**Why.** The one-year pair settled which scheme the budget quantities
+converge to: the split semi-Lagrangian scheme converges TO `lr` at the open
+face as its sub-step count grows (§1.8), so `lr` is the reference there, and
+its only defect is the 70–250 CFL sub-steps per step that the 24 km zonal
+spacing at the cap edge forces (6.6–7 s of the step). Lin & Rood (1996, §3)
+lift that limit with the flux-form semi-Lagrangian (FFSL) extension that
+FV3 uses near its poles, and `src/advection/ffsl_lr.py` is `fct_lr` with it:
+the flux through a face whose Courant number is N + f is the content of the
+N whole upwind cells plus the PPM sliver of fraction f of the next one, still
+exact flux form (every flux appears twice), so conservation, the open faces,
+the reservoir inflow, the Zalesak limiter, the cap stirring, the continuity
+omega and the face-flux diagnostic are `fct_lr`'s, imported. For |c| < 1 the
+sweep is `fct_lr._lr_sweep` bit for bit on periodic rows. Two deliberate
+differences: the sliver is measured in the donor cell's own area rather than
+the face length (the same divergence to O(dφ²); it is what keeps a whole-cell
+shift exact on the sphere and the pole half-cell positive without closing the
+cap-internal faces), and the reservoir inflow is scaled by the edge air mass
+(`fct_lr` passes the mixing ratio alone, a ~1 % approximation at its 100 s
+sub-steps that would break a uniform field at hourly ones). The vertical
+remap has no Courant limit, so the sub-step count `ADV_FFSL_K` is free; the
+default 6 is one per hourly CESM wind, and raising it is a plain convergence
+knob (each sub-step costs ~1/200 of a production `lr` step and fewer remaps
+mean less diffusion than production `lr`, not more — unlike the SL scheme,
+where every extra gather smooths). `ADV_FFSL_SPLIT=strang` (default) orders
+the sub-step z/2, horizontal, z/2 and alternates x,y / y,x, for the same
+reason the SL split needed it at the face.
+
+**Gates.** `scripts/validation/test_ffsl_transport.py` (CPU, ~100 s): the
+sweep equals `fct_lr`'s at |c| < 1, conserves Σ a ρ q to roundoff at |c| up to
+8 and keeps a uniform mixing ratio uniform, a bell shifted 3.7 cells per step
+lands where the exact shift puts it with the accuracy of a 0.7-cell step, the
+3-D driver closes `dM = f_top − f_bot` and keeps a uniform field with the
+random divergent winds at K = 6 and 12, and Williamson 1 at hourly sub-steps
+(Courant up to ~6 at the cap edge) is as accurate as `lr` at CFL 0.5 with a
+tenth of the sub-steps. Against the analytic truth (`compare_hz_operators.py`,
+`compare_3d_operators.py`):
+
+| case | lr (CFL 0.5) | ffsl K=6 | ffsl K=24 | SL split K=6 |
+|---|---|---|---|---|
+| Williamson 1, axis tilted 45° (L2 / peak) | 0.013 / 0.966 | 0.014 / 0.996 | 0.019 / 0.954 | 0.0125 / 0.976 |
+| Nair–Lauritzen 4, strong deformation (L2 / peak) | 0.132 / 0.777 | 0.225 / 0.961 | 0.113 / 0.801 | 0.058 / 0.915 |
+| closed-column 3-D divergent, mild deformation (L2) | 0.0089 | **0.0065** | 0.0076 | 0.0067 |
+
+The strong-deformation case is the one weakness: at hourly sub-steps with
+Courant numbers of several, the sequential x-then-y sweeps leave an air-mass
+splitting error of O(dt² ∂u/∂x ∂v/∂y) per sub-step that `lr`'s 100 s
+sub-steps never see and that Lin & Rood's inner/outer operator cross terms
+remove (never needed in `fct_lr`, not implemented here). More sub-steps
+remove it too, and at K = 24 the scheme is still 4× cheaper than `lr`.
+
+**Coupled A/B (10 days, physics microphysics, vs `bench_phys30d`; `runs/ffsl10d_K6`, `_K12`, `_K24`):**
+
+| scheme | advect s/step | mass | cumul. bottom export | settling | AOD | number |
+|---|---|---|---|---|---|---|
+| lr at CFL 0.25 (lr's own convergence) | ~14 | +0.02 % | +0.4 % | −0.0 % | +0.0 % | +0.0 % |
+| SL split, Strang + Jacobian + remainder, K=6 (§1.8 default) | 0.8 | −0.22 % | +8.4 % | +0.1 % | −0.2 % | +2.8 % |
+| SL split, same, K=24 | 2.6 | −0.13 % | +2.6 % | +0.2 % | −0.2 % | +2.9 % |
+| **ffsl K=6** | **0.6** | −0.44 % | +22 % | +1.0 % | −0.45 % | +1.9 % |
+| ffsl K=12 | 0.9 | −0.18 % | +9.0 % | +0.4 % | −0.25 % | +2.3 % |
+| **ffsl K=24** | **1.6** | **−0.05 %** | **+2.5 %** | +0.1 % | −0.15 % | +2.5 % |
+
+(`lr` itself: 7.0 s.) At K = 24 the large-Courant `lr` is the closest thing to
+`lr` of everything built, at 4.4× lower transport cost; at K = 6 the
+splitting error above shows up at the face exactly as the deformation case
+predicted, and the K series converges between first and second order (the
+alternating x,y / y,x order is second order only over pairs of sub-steps).
+K = 24 is the operating point; the two ways to make K = 6–12 viable, if
+transport ever matters again once the microphysics and radiation are
+emulated, are Lin & Rood's cross terms (two extra advective-form inner
+sweeps per sub-step) and a cheaper sweep kernel (the FFSL sweep costs ~2× an
+`lr` sweep per sub-step: f64 cumsum, five gathered PPM arrays).
+
+**30-day A/B at K = 24 (`runs/ffsl30d_K24`, day 30 relative to `lr`):**
+
+| scheme | mass | cumul. bottom export | settling | SO2 | AOD | number | r_eff | TOA forcing |
+|---|---|---|---|---|---|---|---|---|
+| lr at CFL 0.25 | +0.06 % | +0.1 % | −0.05 % | +0.03 % | +0.07 % | −0.01 % | +0.03 % | −0.3 % |
+| old Lie split K=6 | −1.92 % | +15 % | −3.5 % | +1.0 % | −1.0 % | −1.9 % | −2.8 % | +4.1 % |
+| SL split, §1.8 default, K=6 | −0.48 % | +7.8 % | +0.6 % | −0.2 % | −1.4 % | +2.9 % | −0.9 % | +6.0 % |
+| **ffsl K=24** | **−0.15 %** | **+1.2 %** | +0.14 % | +0.00 % | −0.9 % | +2.4 % | −0.95 % | +5.1 % |
+
+The budget terms (mass, export, settling, SO2) are at `lr`'s own convergence
+level. The number, r_eff, AOD and forcing differences are shared with the SL
+scheme although their budgets differ by 10×, so they are not the transport
+operator's: both new schemes advected on the hourly CESM winds in these runs
+(`ADV_SL_HOURLY=1`), `lr` on the two step snapshots interpolated in time; the
+next paragraph puts `ffsl` on `lr`'s winds, which is now the default.
+
+**Wind cadence (`ADV_SL_HOURLY=0`, 2026-10-14).** Production will receive
+winds as six-hourly snapshots (from CESM today, from an atmospheric emulator
+later), so `lr`'s input — the two step-end snapshots, linear in time at every
+sub-step — is the production cadence, and the hourly CESM mode is a
+diagnostic luxury. `runs/ffsl10d_K24brack` is ffsl K = 24 on those
+bracketing winds (`runs/ffsl30d_K24brack` is the same to 30 days), relative to
+`lr`:
+
+| ffsl K=24 on | day | mass | cumul. export | settling | SO2 | AOD | number | r_eff | TOA forcing | H2SO4 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hourly winds | 10 | −0.05 % | +2.5 % | +0.12 % | +0.01 % | −0.15 % | +2.5 % | +0.9 % | (noise) | −0.5 % |
+| bracketing winds (production) | 10 | −0.04 % | +1.8 % | +0.05 % | +0.00 % | −0.10 % | −0.3 % | +0.0 % | (noise) | +0.0 % |
+| hourly winds | 30 | −0.15 % | +1.2 % | +0.14 % | +0.00 % | −0.9 % | +2.4 % | −0.95 % | +5.1 % | +3.4 % |
+| **bracketing winds (production)** | **30** | **−0.16 %** | **+0.8 %** | −0.09 % | +0.09 % | **−0.30 %** | **−0.39 %** | −0.17 % | **+2.0 %** | +0.06 % |
+
+Number, r_eff, H2SO4, AOD and forcing collapse toward `lr`: those residuals
+were the wind cadence, not the operator. On production-cadence winds ffsl
+K = 24 is within 2 % of `lr` on every quantity at day 30, with the budget
+terms within 0.2 % (export +0.8 %, which is `lr`'s own sub-stepping
+convergence level). The day-10 forcing is −0.002 W m⁻² and its percentage
+is noise at that size. The bracketing mode also reads one snapshot per step
+
+instead of six: `read` 0.2 s against 1.5 s, so the production step is
+advect 1.5 s + read 0.2 s where `lr` is 7.0 + 0.2 s. The hourly-versus-
+bracketing difference (≈2.7 % in number, ≈3 % in forcing, ≈3 % in H2SO4 at
+day 30) is the value of sub-six-hour wind variability; if it ever
+matters, the cheap way to recover it is interval-mean mass fluxes from the
+wind source at the same cadence, not finer output.
+
+**Production default (2026-10-15).** On that evidence `ffsl` K = 24 on the
+bracketing winds is the production default: `ADV_SCHEME=ffsl`,
+`ADV_FFSL_K=24`, `ADV_SL_HOURLY=0` are the defaults in `coupling.py`,
+`driver_fast.py` and `ffsl_lr.py`, so a bare `run_prod.py` advects at 1.5 s +
+0.2 s read per step where it spent 7.0 + 0.2 s. `ADV_SCHEME=lr` reproduces the
+previous default byte for byte (`fct_lr.py` is untouched and `ffsl_lr.py`
+imports from it), and `lr` remains the reference every transport change is
+measured against. The standing acceptance test is the one-year `ffsl` run
+against `runs/lr1yr`: the gap must stay within a few percent and stop growing.
+
+> **2026-11-05: that acceptance test FAILED, the cause was found and fixed, and
+> the first test against a truth outside the `lr` family reverses the ranking.
+> See §1.10 before using any number in this section.**
+
 ---
+
+## 1.10 The one-year verdict, the FFSL sliver bug, and the CH4 truth test (2026-11-05)
+
+**The one-year acceptance test of §1.9 was run (2026-10-18) and never written
+up; it failed.** `runs/ffsl1yr_K24`, `_K48` against `runs/lr1yr` (coupled,
+physics microphysics, RRTMGP, 10 Tg/yr at 30N/S), day 365 relative to `lr`:
+
+| | lr CFL 0.25 | ffsl K=24 | ffsl K=48 |
+|---|---|---|---|
+| mass burden | +0.4 % | −4.6 % | −3.8 % |
+| AOD 550 | +0.4 % | −4.2 % | −3.6 % |
+| TOA forcing | −0.3 % | +5.2 % | +4.4 % |
+| number, day 270 | +0.1 % | +10.8 % | +13.2 % |
+
+The gap grows with time and doubling K barely moves it. Transport-only
+(`runs/transport1yr_{lr,ffsl,sl}`, MICRO=off RAD=0): ffsl −5.2 % mass,
+sl −2.9 % at a year. The "within 0.2 % at 30 d" of §1.9 was a crossing
+point, not agreement.
+
+**Cause: the FFSL sliver measure.** A 10-day transport-only K ladder
+(`runs/lrT10d`, `ffslT10d_K{24,48,96,192}`) showed ffsl converging in K to a
+limit that is NOT `lr` (bottom export +1.1 / −1.6 / −2.9 / −3.6 % at
+K = 24/48/96/192) and delivering **70 % more mass into the polar caps at every
+K**. The whole-cell part of the FFSL flux is exact, but the fractional sliver
+was measured in the donor cell's area, `f·a_j`, while `fct_lr` measures it at
+the face, `c·m_face`. The two differ by `tan(φ)·dφ/2`, 4.5 % at the 80° cap
+edge, with opposite sign for poleward and equatorward flux, so the small NET
+cap exchange was biased by 70 % and the bias did not shrink with K (it is
+exact only as f → 1). `ffsl_lr.py` now has `ADV_FFSL_FRAC = cell | face |
+exact`: `face` is `fct_lr`'s convention (bit-identical at |c| < 1,
+`test_ffsl_transport.py` test 1), `exact` is the true spherical sliver area
+`(sin φ_face − sin(φ_face ∓ f dφ))/dφ`, exact at both limits, and is the
+default. Same ladder with `exact` (`runs/ffslX10d_K{24,48,96,192}`), day 10
+relative to `lr`:
+
+| K | polar-cap delivery | bottom export | mass |
+|---|---|---|---|
+| 24 | +0.6 % | +4.3 % | −0.10 % |
+| 96 | +0.2 % | +0.5 % | −0.01 % |
+| 192 | +0.2 % | −0.1 % | +0.01 % |
+
+ffsl now converges to `lr`. What is left at K = 24 is the first-order
+open-face splitting error of §1.8, which the old measure had been cancelling
+against; it needs K ≈ 96 (6 s/step, the cost of `lr`) to go away.
+Over a year, transport-only (`runs/transport1yr_ffslX_K24`, `_K48` against
+`transport1yr_lr`): mass −2.2 % at K=24 (was −5.2 % with the old measure) and
+−1.0 % at K=48 (day 346), bottom export +2.3 % / +0.7 %, polar-cap delivery
+−17 % / −14 % (was +72 %). The fix halves the one-year drift and each doubling
+of K halves it again, as a first-order term should.
+
+**A second lr-family fact.** `lr`'s "advection numerical residual" is not
+roundoff over a year: +0.032 M0 at CFL 0.5 and +0.093 M0 at CFL 0.25
+(`runs/lr1yr_cfl025`) — it GROWS with the sub-step count, is 0.3–0.8 % of the
+final burden, and is the whole of the `lr` CFL 0.25-vs-0.5 difference. `lr`
+is therefore not an unambiguous target; the budgets below are consistent
+with `lr` creating mass at the few-tenths-of-a-percent-per-year level.
+
+**The truth test.** `scripts/validation/ch4_truth_test.py` advects CESM's own
+hourly CH4 field (inert on a one-year timescale below ~30 hPa; CESM moved it
+with its FV dycore, Lin–Rood FFSL PPM on this grid with floating Lagrangian
+levels) from 1996-01-01 with one of this model's schemes on the same winds,
+exactly as `coupling.py` calls it (6 h steps, bracketing winds, open faces
+and caps fed by the truth, f32), and scores it against CESM's CH4 every step:
+RMSE, bias, pattern correlation over |lat| ≤ 80, p ≥ 30 hPa, dp·cos
+weighted. Persistence (IC held) is the do-nothing baseline. Output:
+`outputs/ch4_truth/<tag>.npz` and `.log`. One tracer, 15–70 min per scheme-year.
+
+RMSE relative to `lr` CFL 0.5 (whose year-mean RMSE is 2.99e-8 mol/mol, 29 %
+of persistence and 18 % of the truth's standard deviation):
+
+| scheme | d30 | d90 | d180 | d270 | d365 | year mean | corr d365 | advect s/step (1 tracer) |
+|---|---|---|---|---|---|---|---|---|
+| **sl K=12** | 0.74 | 0.87 | 0.63 | 0.68 | 0.81 | **0.75** | 0.985 | 0.29 |
+| sl K=24 | 0.74 | 0.86 | 0.68 | 0.76 | 0.88 | 0.80 | 0.986 | 0.57 |
+| **sl K=6** | 0.79 | 1.00 | 0.84 | 0.85 | 0.80 | **0.87** | 0.982 | 0.22 |
+| lr CFL 0.5 (Noah's `fct_lr`) | 1 | 1 | 1 | 1 | 1 | 1.00 | 0.974 | 0.14 (7 s at 82 tracers) |
+| ffsl exact K=96 | 1.02 | 1.06 | 1.17 | 1.53 | 1.03 | 1.21 | 0.967 | 2.2 |
+| lr CFL 0.25 | 1.01 | 1.02 | 1.12 | 1.13 | 1.13 | 1.09 | 0.973 | 1.0 |
+| sl K=6, hourly winds (`ADV_SL_HOURLY=1`) | 0.81 | 1.05 | 0.92 | 1.05 | 0.81 | 0.95 | 0.982 | 0.08 |
+| sl K=3 | 0.93 | 1.33 | 1.51 | 1.62 | 1.09 | 1.37 | 0.972 | 0.11 |
+| ffsl exact K=24 (fixed) | 1.47 | 1.73 | 2.91 | 5.26 | 2.00 | 2.98 | 0.898 | 0.53 |
+| ffsl cell K=24 (production 10-15 → 11-05) | 2.09 | 2.90 | 5.17 | 6.10 | 4.18 | 4.63 | 0.385 | 0.59 |
+| persistence | 2.80 | 3.23 | 4.33 | 3.36 | 2.59 | 3.46 | 0.780 | — |
+
+Structure at day 365 (zonal-mean RMS, 30–143 hPa): `sl` K=6 and K=12 beat
+`lr` in every latitude band and level group; K=12 is the optimum of the `sl`
+ladder (K=3 1.37, K=6 0.87, K=12 0.75, K=24 0.80 — at K=24 the polar-band
+error is back at `lr`'s and the bias grows, the smoothing-per-gather effect
+of §1.8 setting in); `ffsl` K=24's excess error is at
+60–80S and at 60–120 hPa (the large-Courant x/y split without Lin & Rood's
+cross terms, plus the open-face term); `lr` is biased HIGH by ~3 % of the mean
+at 40–75 hPa where `sl` is unbiased — so the "10–16 % more bottom export than
+lr" that §1.8 counted against `sl` is `lr` under-exporting, not `sl`
+over-exporting. `lr` at CFL 0.25 is WORSE than at 0.5 (its residual grows with
+sub-steps). Feeding `sl` the hourly wind snapshots instead of the two
+bracketing ones does not help (0.95 vs 0.87), so `ADV_SL_HOURLY=0` stays.
+Above ~10 hPa every scheme is worse than persistence: CH4 is
+chemically active there (and the top face is open), which is why the score
+starts at 30 hPa.
+
+**Verdict.** For transport against the only truth available, the split
+semi-Lagrangian scheme (`ADV_SCHEME=sl`, dinosaur horizontal gather +
+`fct_lr`'s flux-form vertical, Jacobian air mass + remainder sweep, Strang,
+K = 12 recommended, K = 6 nearly as good) is the most accurate scheme in the
+tree AND the cheapest (0.5 s/step at K=6, ~0.9 s at K=12, for 82 tracers, vs
+1.5 s ffsl and 7 s lr). To run it: `ADV_SCHEME=sl ADV_SL_K=12` (everything
+else at its defaults: `ADV_SL_VERT=flux ADV_SL_SPLIT=strang ADV_SL_JAC=1
+ADV_SL_HOURLY=0`). The default `ADV_SCHEME` in `coupling.py`, `driver_fast.py`
+and `run_prod.py` is still `ffsl` and should be switched. `ffsl` at any affordable
+K is worse than `lr`; with the sliver fix it is a correct large-Courant `lr`
+and is kept for that (and for emulated winds that violate discrete
+continuity, where flux form needs no fixer), but it is no longer the
+recommended production transport. `lr` remains the regression reference for
+`ffsl` only.
 
 # 2. Microphysics
 

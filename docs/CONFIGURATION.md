@@ -160,14 +160,26 @@ More detail: [BOUNDARY_CONDITIONS.md](./BOUNDARY_CONDITIONS.md).
 
 | variable | default | meaning |
 |---|---|---|
-| `ADV_SCHEME` | `lr` | `lr` = Lin-Rood flux form, conservative to roundoff. `fast` = advective form, ~3e-4/day residual, cheaper |
+| `ADV_SCHEME` | `ffsl` | `ffsl` (default since 2026-10-15) = `lr` itself at large Courant number (`src/advection/ffsl_lr.py`, Lin & Rood's flux-form semi-Lagrangian extension): the same flux-form operators, faces, budgets and limiter at `ADV_FFSL_K` sub-steps instead of 70–250; at K = 24 on the step snapshots (`ADV_SL_HOURLY=0`) within 0.2 % of `lr` on the 30-day budgets and 2 % on every quantity, advect 1.5 s/step vs 7 s (PROCESSES.md §1.9). `lr` = Lin-Rood flux form at CFL sub-steps, conservative to roundoff: the default until 2026-10-15, byte for byte unchanged, and the reference the budgets are measured against. `fast` = advective form, ~3e-4/day residual, cheaper. `sl` = the split operator (`src/advection/sl_lr.py`): dinosaur's semi-Lagrangian remap per level (no CFL limit, ~0.4 s/step instead of ~6.6 s) Strang-composed with `lr`'s own flux-form vertical sweep on the open faces, so `ADV_WCONT=1`, `BC_EDGE=open`, `B_vf` and the budgets mean what they mean under `lr`. More accurate than `lr` on the analytic and closed-column truth tests; 30 days vs `lr`: mass −1.2 %, bottom-face export +16 %, forcing +8 %. Opt-in pending the one-year pair — [PROCESSES.md §1.8](./PROCESSES.md), [TRANSPORT_SL_HANDOFF.md](./TRANSPORT_SL_HANDOFF.md) |
+| `ADV_SL_K` | `6` | `sl` only: sub-steps per coupling step (6 = one per hourly CESM wind at `STEP_HOURS=6`). Keep it at the wind cadence: every SL gather smooths, so K > 6 is LESS accurate on analytic tests (PROCESSES.md 1.8), and K < 6 under-resolves the vertical PPM sweep |
+| `ADV_SL_FIXER` | `global` | `sl` only: per-tracer mass fixer on the closed extended column. `global` = proportional rescale (JCM's); `local` = Bermejo–Conde, corrects only where the cubic gather overshoots its linear counterpart (+1 linear gather); `none` = raw operator (diagnostics) |
+| `ADV_SL_HOURLY` | `0` | `sl` and `ffsl`: `0` (default since 2026-10-15) interpolates the two step snapshots in time at every sub-step, as `lr` does and as production winds arrive (six-hourly); `1` reads the hourly CESM winds between them so each sub-step advects on its own hour (~1.3 s/step of I/O; worth ≈3 % in number and forcing at day 30, PROCESSES.md §1.9) |
+| `ADV_SL_VERT` | `flux` | `sl` only: `flux` = the split operator — SL horizontal remap per level + `fct_lr`'s flux-form vertical sweep with its open faces, reservoir inflow, positivity limiter and face-flux diagnostic (`ADV_WCONT=1` semantics, `B_vf` on). `sl` = the handoff's closed-column 3-D gather with Dirichlet edge levels (sets `ADV_WCONT=0`), which failed the 30-day A/B |
+| `ADV_SL_OMEGA` | `cont` | `sl`+`flux` only: face omega rederived from discrete continuity with `lr`'s own operator (default) or CESM center omega averaged to the faces |
+| `ADV_SL_SPLIT` | `strang` | `sl`+`flux` only: how the horizontal remap and the vertical sweep are composed per sub-step. `strang` = half vertical sweep, horizontal remap with the air mass `1 − dt·div(v)` carried, half vertical sweep: the open-face flux is second order in the sub-step with still one SL gather. `lie` = the 2026-10-13 composition, horizontal then vertical, first order at the open face (30-day export +21 % vs `lr` with the air mass frozen, +37 % with it carried; PROCESSES.md 1.8) |
+| `ADV_SL_JAC` | `1` | `sl`+`flux` only, with the air mass carried: `1` takes the air mass after the horizontal remap from the Jacobian of the departure map (second-order, like the departure points) and returns the sub-step's bookkeeping remainder `ρ − 1` through the column's own faces at the local mixing ratio; `0` uses the Eulerian `1 − dt·div(v)` and the global column fixer, which spread a local O(dt²) remainder over the globe every sub-step (first order in K; PROCESSES.md 1.8) |
+| `ADV_SL_RHO` | `0` | `sl`+`flux`+`lie` only: `1` carries the air mass through the horizontal step so the per-level fixer is an O(dt²) correction instead of an O(dt·div) uniform transfer every sub-step (the downward redistribution behind the one-year export excess). `strang` always carries it; the knob is kept for the diagnostics |
+| `ADV_SL_VORDER` | `linear` | `sl` only: vertical gather order (`cubic` degrades to linear in the end cells) |
+| `ADV_SL_ITER` | `2` | `sl` only: departure-point fixed-point iterations |
 | `ADV_CFL` | `0.5` | CFL target for internal sub-stepping |
 | `ADV_F32` | `1` | single precision. **Validate advection changes at `ADV_F32=1 ADV_CFL=0.5`** |
 | `ADV_VPOS` | `1` | vertical positivity limiter. `0` is a forensic escape hatch, **not a supported configuration** — it reproduces a corrupt number field |
-| `ADV_WCONT` | `1` | rederive omega from discrete continuity and open the vertical faces |
+| `ADV_FFSL_K` | `24` | `ffsl` only: sub-steps per coupling step (24 = the production operating point since 2026-10-15; 6 = one per hourly CESM wind). A convergence knob with no smoothing penalty: each sub-step costs ~1/200 of a production `lr` step, and K = 24 reproduces `lr`'s 10-day budget to 0.05 % in mass at 4× lower cost; K = 6 carries the x/y splitting error of hourly sub-steps at the face (PROCESSES.md 1.9) |
+| `ADV_FFSL_SPLIT` | `strang` | `ffsl` only: `strang` = z/2, horizontal (x,y alternating with y,x), z/2; `lie` = `fct_lr`'s x, y, z |
+| `ADV_WCONT` | `1` | rederive omega from discrete continuity and open the vertical faces. Default `0` only under `ADV_SCHEME=sl ADV_SL_VERT=sl` (that column is closed; `1` there leaves the edge levels free with no exchange at all, and the header warns) |
 | `ADV_METRIC` | `1` | carry the cos(φ) area metric in the y-sweep |
 | `ADV_DXFIX` | `1` | true grid spacing in the x-sweep |
-| `ADV_POLAR` | `zonal` | mass-conserving well-mixed polar caps above \|lat\| 80°; anything else = legacy reservoir overwrite, which discards mass |
+| `ADV_POLAR` | `zonal` | mass-conserving well-mixed polar caps above \|lat\| 80°; anything else = legacy reservoir overwrite, which discards mass. Honoured by `sl` too (stirred after every sub-step) |
 | `TRACER_CHUNK` | `0` | tracers advected per batch (`0` = all 82 at once). Lower it if advection OOMs |
 
 ## Microphysics and settling
@@ -207,6 +219,30 @@ independent, so how cells are grouped into chunks cannot change results.
 | `FAST_COND_SUB_CAP` | `40` | condensation substep cap |
 | `FAST_COAG_CMAX` | `0.05` | coagulation adaptive-step tolerance — how much error per step is accepted, i.e. how many substeps you actually spend under the cap |
 
+## Microphysics engine selection and the emulator (`driver_fast.py`)
+
+Which batched engine fills the microphysics seam, and an optional second one
+run alongside it for comparison. See `docs/EMULATOR.md`.
+
+| variable | default | meaning |
+|---|---|---|
+| `MICRO_ENGINE` | `fast` | `fast` = `tomas_jax.fast.run_fast` (the production physics, above). `emulator` = the learned 6 h operator from `/data/tomas-emulator`, one forward pass per cell per step (`src/microphysics/tomas_emulator.py`). Requires torch in the run environment (`/data/aide_emu_venv`) |
+| `MICRO_REF` | *(unset)* | name the OTHER engine to run it on the same input too, purely for comparison: the run advances with `MICRO_ENGINE`, the reference output is compared cell by cell and discarded, and the per-step error + both engines' timings go to `micro_bench_<TAG>.npz` |
+| `MICRO_REF_EVERY` | `1` | compare every N coupling steps |
+| `EMU_CKPT` | `$EMU_ROOT/frontier_bintf_kchain_big_rebal/avg_top3.pt` | emulator checkpoint. The lighter `frontier_bintf_kchain_rebal/avg_top3.pt` needs `EMU_D=256 EMU_NL=4` |
+| `EMU_D`, `EMU_NL` | `384`, `6` | emulator width and depth; must match the checkpoint |
+| `EMU_BS` | `16384` | cells per forward pass. Fixed per compiled CUDA graph; the last batch is padded |
+| `EMU_DTYPE` | `fp16` | autocast precision, `fp16` or `fp32`. `bf16` is refused (widens the 14-day tails, handoff §2) |
+| `EMU_COMPILE` | `1` | `torch.compile(mode='reduce-overhead')`; `0` = eager (2–3× slower, same numbers) |
+| `EMU_OH_FLOOR` | `100` | floor on the OH samples handed to the emulator [molec/cm³]. The SZA parabola is exactly zero at night, which the emulator never saw; see `docs/EMULATOR.md` for the sweep behind the value |
+| `EMU_SO2_FLOOR` | `1e-17` | floor on the per-box SO2 handed to the emulator [kg/box]. The training set's SO2 never fell below this; an advected-to-zero SO2 is 7 σ outside it and was answered with 1660× the physics' mass |
+| `EMU_PROJECT` | `clip` | what is enforced on the emulator's answer: `clip` = two-moment consistency (as TOMAS's mnfix); `chem` (2026-10-13) = that plus the exact sulfur budget done from the chemistry side: SO2 decays by the physics' own k₁(T,P,RH)·OH, H2SO4 relaxes to its production / condensation-sink balance with the physics' Fuchs–Sutugin sink on the network's output distribution, and the aerosol gets exactly the sulfur the gas lost (the network's per-bin change kept, the residual deposited by sink fraction, re-clipped) — the network then only supplies number and the shape of the distribution; `sulfur` = conservation taken from the network's own gas answer — **worse, see `docs/EMULATOR.md`**; `0` = nothing |
+| `EMU_CODE`, `EMU_ROOT` | `/data/tomas-emulator`, `/data/tomas-jax-output/emulator_v1` | the emulator code tree and the checkpoints / `norm_stats.npz` root |
+| `EMU_TRIAGE` | `1` | skip the network on QUIET cells (2026-10-13): cells whose gas sulfur cannot move the aerosol mass by `EMU_TRIAGE_POT` (1e-3), with fewer than `EMU_TRIAGE_N` (300) cm⁻³, a sustainable H2SO4 below `EMU_TRIAGE_HSS` (1e5 cm⁻³) and less than `EMU_TRIAGE_FINE` (0.1) of their number below 10 nm. They get the exact pseudo-first-order SO2 + OH step with the acid condensed by surface area and no change in number. ~30 % of the grid, 80 % of the mass; the physics itself moves them by 0.13 % (number, median) per step. `0` sends every cell to the network |
+| `EMU_PHYS_TOP` | `0` | hybrid (2026-10-13): hand this fraction of cells — the top ones by total sulfur per box (SO4 + SO2 + H2SO4) — to `tomas_jax.fast` with the production knobs instead of the network. The top 1 % of cells hold 80 % of all particles and carry ~90 % of the emulator's signed global number error (the injection-ring bursts); the physics on them costs 0.2 s/step (`0.01`) to 0.5 s (`0.03`) after a one-off 20 s jit compile, and the network / quiet step take the rest. `EMU_PHYS_PAD` (4096) pads the subset to a fixed shape for the jit cache; `EMU_PHYS_CHUNKS` (1) stiffness-sorts it into that many sequential chunks |
+| `EMU_PHYS_NUM` | `0` | hybrid, second rule (2026-10-13): also hand this fraction of the *remaining* cells, ranked by total particle number per box, to the fast physics. Needed with `EMU_PROJECT=chem`: along the closure run's trajectory the network under-coagulates the dense fine populations (~1e4 cm⁻³) that the diffuse plume becomes — the physics halves their number per step, the network removes a quarter — and the sulfur ranking does not see them (little mass). The top 4 % by number carry 89 % of that error, the top 8 % 98 %; 1.1 s / ~2 s per step. |
+| `MICRO_SAMPLE_EVERY` | `0` | every N steps write a stratified sample of the cells the engine is about to see to `micro_samples_<TAG>_s<step>.npz` (`src/microphysics/micro_sampler.py`): the emulator's training data from this model's own states. `MICRO_SAMPLE_N` (5000) cells per sample, plus the plume stratum capped at half of it. Needs torch (the triage test) even under `MICRO_ENGINE=fast` |
+
 ## OH chemistry
 
 | variable | default | meaning |
@@ -227,6 +263,15 @@ independent, so how cells are grouped into chunks cannot change results.
 | `RAD_LAT_CHUNK` | `96` | latitude rows per RRTMGP chunk; bit-identical either way. Drop to 48 if radiation OOMs |
 | `CO2_PPM` | `380.0` | background CO2 (~2005, for 1996–2014 forcing) |
 | `N2O_PPB` | `319.0` | background N2O |
+| `RAD_REF_CACHE` | `inputs/cache/rad_ref` | per-archive-hour cache of the reference-aerosol solve (`RAD_MODE=anomaly`) and of the clear-sky fields the emulator needs (`src/radiation/rad_cache.py`). A hit is **bit-identical** to computing the field (float64 on disk, same code) and skips both the reference solve and its MAM4 re-binning (~5.6 of the 8.5 s stage); a miss computes and stores. `0` disables. Batch build: `scripts/radiation/build_ref_cache.py` |
+| `RAD_ENGINE` | `rrtmgp` | which engine solves the **evolved** radiation call: `rrtmgp` = the physics (byte-for-byte unchanged), `emulator` = two column networks on the cached clear-sky fields (`src/radiation/rad_emulator.py`, `docs/RADIATION.md`). Stamped into `PHYS_CFG` |
+| `RAD_REF` | — | with `RAD_ENGINE=emulator`: `rrtmgp` also runs the physics on the same input every `RAD_REF_EVERY` radiation steps and logs the comparison to `rad_bench_<TAG>.npz`; the run advances with the emulator. Mirrors `MICRO_REF` |
+| `RAD_REF_EVERY` | `1` | compare every N radiation steps |
+| `RAD_EMU_CKPT` | `inputs/rad_emulator/current` | directory holding `aer.npz` + `planck.npz` (exported by `scripts/radiation/train_rad_mlp.py`) |
+| `RAD_EMU_ANOM` | `net` | emulator's reference term in anomaly mode: `net` = the networks on the reference aerosol too (errors correlated with the evolved call, cancel in the background; cached per hour and checkpoint), `phys` = the exact cached physics reference |
+| `RAD_EMU_ARF` | `emu` (was `exact` when `RAD_REF=rrtmgp`, until 2026-10-17) | where the emulated run's reported TOA forcing (`arf_toa`) comes from: `exact` = the physics A/B samples (the forcing is the global mean of a ~3 % difference of the aerosol's TOA effect, below the networks' ±1 % bias early in a run; with `RAD_REF_EVERY=3` the samples cycle through the four local times, so the trailing window stays a diurnal mean), `emu` = the networks |
+| `RAD_EMU_CLIP` | `20` | sanity clamp on the networks' heating outputs [K/day] (TOA deltas at 25× that in W m⁻²), NaN → 0, every clamped cell counted and logged. A residual MLP without normalisation can blow up on an input far outside its training set (an aerosol net trained at `lr 1e-3` returned 674 K/day in a column whose upper-troposphere humidity sat at −16 σ, and `dT_rad` was NaN two steps later); the physics never exceeds ~8 K/day even in the ×10-augmented labels, so 20 is a no-op on a healthy run. `0` disables it |
+| `RAD_SAMPLE_EVERY` | `0` | write `rad_sample_<TAG>_s<step>.npz` (evolved bins, `dT_rad`, hour) every N radiation steps: emulator training data for `scripts/radiation/label_columns.py` |
 
 ## GPU and process environment (`run_prod.py`)
 
@@ -348,6 +393,31 @@ launcher sets nothing and `coupling.py`'s own default stands.
 | `--n-coag-substeps` | `N_COAG_SUBSTEPS` | — | forward-Euler coag substeps (legacy MICRO=coag path) |
 | `--coag-max-substeps` | `COAG_MAX_SUBSTEPS` | — | ceiling on the adaptive coag substeps (speed-critical) |
 
+### microphysics engine selection and the emulator
+
+| flag | variable | prod | meaning |
+|---|---|---|---|
+| `--micro-engine` | `MICRO_ENGINE` | — | which batched engine advances the run (default fast = tomas_jax.fast) |
+| `--micro-ref` | `MICRO_REF` | — | ALSO run this engine on the same input and log the per-step comparison to micro_bench_<TAG>.npz |
+| `--micro-ref-every` | `MICRO_REF_EVERY` | — | compare every N coupling steps (default 1) |
+| `--emu-ckpt` | `EMU_CKPT` | — | emulator checkpoint (default: bintf_big_rebal avg_top3.pt) |
+| `--emu-d` | `EMU_D` | — | emulator width (384 for the default ckpt, 256 for the light one) |
+| `--emu-nl` | `EMU_NL` | — | emulator depth (6 for the default ckpt, 4 for the light one) |
+| `--emu-bs` | `EMU_BS` | — | cells per emulator forward pass (default 16384) |
+| `--emu-dtype` | `EMU_DTYPE` | — | emulator autocast precision (default fp16; bf16 refused) |
+| `--emu-compile` | `EMU_COMPILE` | — | torch.compile(reduce-overhead) the emulator (default 1) |
+| `--emu-oh-floor` | `EMU_OH_FLOOR` | — | OH floor handed to the emulator [molec/cm3] (default 100) |
+| `--emu-so2-floor` | `EMU_SO2_FLOOR` | — | SO2 floor handed to the emulator [kg/box] (default 1e-17) |
+| `--emu-project` | `EMU_PROJECT` | — | output projection: clip (default) / chem / sulfur / 0 |
+| `--emu-triage` | `EMU_TRIAGE` | — | 1 = analytic step for quiet cells, network for the rest (default 1); 0 = network everywhere |
+| `--emu-phys-top` | `EMU_PHYS_TOP` | — | hybrid: fraction of cells (top by sulfur) integrated by the fast physics instead of the network (0 = off) |
+| `--emu-phys-chunks` | `EMU_PHYS_CHUNKS` | — | hybrid: stiffness-sorted chunks for the physics subset (default 1) |
+| `--emu-phys-num` | `EMU_PHYS_NUM` | — | hybrid: fraction of the remaining cells (top by particle number) integrated by the fast physics (0 = off) |
+| `--micro-sample-every` | `MICRO_SAMPLE_EVERY` | — | write a training-data sample of the engine's input every N steps (0 = off) |
+| `--micro-sample-n` | `MICRO_SAMPLE_N` | — | cells per sample (default 5000; plus the plume, capped at n/2) |
+| `--emu-code` | `EMU_CODE` | — | tomas-emulator code tree (default /data/tomas-emulator) |
+| `--emu-root` | `EMU_ROOT` | — | emulator checkpoints/norm_stats root |
+
 ### fast microphysics engine
 
 | flag | variable | prod | meaning |
@@ -364,7 +434,18 @@ launcher sets nothing and `coupling.py`'s own default stands.
 
 | flag | variable | prod | meaning |
 |---|---|---|---|
-| `--adv-scheme` | `ADV_SCHEME` | — | transport form (default lr = Lin-Rood flux form) |
+| `--adv-scheme` | `ADV_SCHEME` | — | transport form (default ffsl = lr at large Courant number, the production scheme since 2026-10-15; lr = the previous default; sl = semi-Lagrangian, docs/TRANSPORT_SL_HANDOFF.md) |
+| `--adv-sl-k` | `ADV_SL_K` | — | SL: sub-steps per coupling step (default 6 = one per hourly wind) |
+| `--adv-sl-fixer` | `ADV_SL_FIXER` | — | SL: per-tracer mass fixer on the closed column (default global; local = Bermejo-Conde) |
+| `--adv-sl-hourly` | `ADV_SL_HOURLY` | — | sl and ffsl: 1 = read the hourly CESM winds between the step snapshots; 0 (default) = the two snapshots interpolated in time |
+| `--adv-sl-vorder` | `ADV_SL_VORDER` | — | SL: vertical gather order (default linear) |
+| `--adv-sl-vert` | `ADV_SL_VERT` | — | SL: vertical treatment (default flux = fct_lr's open-face flux sweep; sl = closed-column 3-D gather, A/B-failed) |
+| `--adv-sl-omega` | `ADV_SL_OMEGA` | — | SL flux vertical: face omega from continuity (lr's, default) or CESM centers averaged |
+| `--adv-sl-split` | `ADV_SL_SPLIT` | — | SL flux vertical: strang (default) = V/2 H V/2 with the air mass carried; lie = H then V |
+| `--adv-sl-rho` | `ADV_SL_RHO` | — | SL flux vertical, lie split only: carry the air mass through the horizontal step (0 / 1) |
+| `--adv-sl-jac` | `ADV_SL_JAC` | — | SL flux vertical: Jacobian air mass + remainder through the faces (1, default) or Eulerian + column fixer (0) |
+| `--adv-ffsl-k` | `ADV_FFSL_K` | — | ffsl: sub-steps per coupling step (default 24, the production operating point; 6 = hourly) |
+| `--adv-ffsl-split` | `ADV_FFSL_SPLIT` | — | ffsl: sweep order (strang default; lie = fct_lr's) |
 | `--adv-cfl` | `ADV_CFL` | — | horizontal CFL target (production 0.5) |
 | `--adv-f32` | `ADV_F32` | — | float32 transport sweeps (production 1) |
 | `--adv-vpos` | `ADV_VPOS` | `1` | VERTICAL POSITIVITY LIMITER -- see the header; do not turn off |
@@ -380,6 +461,15 @@ launcher sets nothing and `coupling.py`'s own default stands.
 | `--co2-ppm` | `CO2_PPM` | — | background CO2 for RRTMGP |
 | `--n2o-ppb` | `N2O_PPB` | — | background N2O for RRTMGP |
 | `--rad-lat-chunk` | `RAD_LAT_CHUNK` | — | latitude rows per radiation chunk (GPU memory) |
+| `--rad-engine` | `RAD_ENGINE` | — | `rrtmgp` (physics, default) or `emulator` (column networks; `docs/RADIATION.md`) |
+| `--rad-ref` | `RAD_REF` | — | `rrtmgp`: A/B the emulator against the physics on the same input, `rad_bench_<TAG>.npz` |
+| `--rad-ref-every` | `RAD_REF_EVERY` | — | compare every N radiation steps (default 1) |
+| `--rad-ref-cache` | `RAD_REF_CACHE` | — | reference/clear-sky cache directory (default `inputs/cache/rad_ref`; `0` = off) |
+| `--rad-sample-every` | `RAD_SAMPLE_EVERY` | — | write emulator training samples every N radiation steps (0 = off) |
+| `--rad-emu-ckpt` | `RAD_EMU_CKPT` | — | emulator checkpoint directory (`aer.npz` + `planck.npz`) |
+| `--rad-emu-anom` | `RAD_EMU_ANOM` | — | `net` (default) or `phys` reference term for the emulated anomaly |
+| `--rad-emu-arf` | `RAD_EMU_ARF` | — | `exact` (physics A/B samples; the default with `--rad-ref rrtmgp` until 2026-10-17 -- its 4-finite-sample window spans 72 h at RAD_REF_EVERY=3, not comparable with a physics run's arf_toa_avg) or `emu` TOA forcing diagnostic |
+| `--rad-emu-clip` | `RAD_EMU_CLIP` | — | sanity clamp on the emulator's heating outputs, K/day (default 20; 0 = off) |
 
 ### memory / performance (cannot change results)
 

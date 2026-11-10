@@ -162,7 +162,9 @@ from tomas_jax.physics.ezcond_ppm_jax import ezcond_ppm_jax
 
 import settling
 
-# --- advection: fct_lr, the production scheme, at the production config --------
+# --- advection: the flux-form scheme at the production config ------------------
+# (fct_lr's sweeps; since 2026-10-15 the default ADV_SCHEME=ffsl is fct_lr at
+# large Courant number, ffsl_lr.py -- see the ADV_SCHEME note below)
 # This used to be `from fct_core import advect_step_batch`, i.e. the legacy
 # sealed-face sweep. Nothing ever ran it: driver_fast.py rebinds this module's
 # global to fct_lr before main() starts, so the only way to reach fct_core was to
@@ -182,10 +184,53 @@ import settling
 # treatment -- see the note at that probe.
 import functools
 import fct_lr                      # src/advection/, put on sys.path by _paths
+# ADV_SCHEME=sl (2026-10-13): semi-Lagrangian transport, advection/sl_lr.py --
+# dinosaur's operator (vendored in sl_core.py) at the same call signature. No
+# CFL sub-stepping: ADV_SL_K fixed sub-steps on the hourly CESM winds, a closed
+# extended column with a per-tracer mass fixer, and Dirichlet reservoir levels
+# (ADV_WCONT defaults to 0 under sl, see below). ~49 ms/step vs 6.6 s for lr
+# at this grid; docs/TRANSPORT_SL_HANDOFF.md. Opt-in; 'fast' is honoured by
+# driver_fast.py only (as before), bare coupling.py runs the default below.
+# ADV_SCHEME=ffsl (2026-10-14): fct_lr itself at large Courant number
+# (advection/ffsl_lr.py, the flux-form semi-Lagrangian extension of Lin & Rood
+# 1996): the same flux-form operators, open faces, budgets and limiter, at
+# ADV_FFSL_K sub-steps instead of 70-250 CFL sub-steps. THE PRODUCTION DEFAULT
+# since 2026-10-15 (K=24 on the two step snapshots, ADV_SL_HOURLY=0): 30 days
+# vs lr within 0.2 % on the budgets and 2 % on every quantity, advect 1.5 s/step
+# instead of 7.0 (docs/PROCESSES.md 1.9). ADV_SCHEME=lr is the previous default,
+# byte for byte (fct_lr is untouched; ffsl_lr imports from it).
+ADV_SCHEME = os.environ.get('ADV_SCHEME', 'ffsl').lower()
+if ADV_SCHEME == 'sl':
+    import sl_lr
+    _adv_fn = sl_lr.advect_step_batch
+elif ADV_SCHEME == 'ffsl':
+    import ffsl_lr
+    _adv_fn = ffsl_lr.advect_step_batch
+else:
+    _adv_fn = fct_lr.advect_step_batch
 advect_step_batch = functools.partial(
-    fct_lr.advect_step_batch,
+    _adv_fn,
     cfl=float(os.environ.get('ADV_CFL', '0.5')),
     dtype=jnp.float32 if os.environ.get('ADV_F32', '1') != '0' else jnp.float64)
+
+# ---- aerosol-representation seam (2026-11-05, MAM4 modal variant, run 3) ----
+# The main loop used to assume the aerosol rows of the tracer stack are the
+# NBINS TOMAS bins. driver_mam4.py carries 4 modes x (num, so4) instead and
+# rebinds these; the defaults are the TOMAS behaviour, bit for bit. Everything
+# bin-based that must stay untouched (Mie optics, per-bin Stokes settling, the
+# size diagnostics, frames3d) sees the state through aer_to_bins. The settling
+# module is bound late (it is imported below), hence the function wrapper.
+AER_NROWS = NBINS            # rows per moment in the tracer stack (num, mas)
+AER_FILL_FN = None           # (ds_mam, t, levs, lat_idx) -> (num, mas) in the
+                             # prognostic representation; None = bin_mam4
+
+
+def aer_to_bins(num, mas):   # prognostic (AER_NROWS, ...) -> TOMAS bins (NBINS, ...)
+    return num, mas
+
+
+def aer_settle(num, mas, T3d, pres3d, dp, dt, dpw, rhow):
+    return settling.settle_step(num, mas, T3d, pres3d, dp, dt, dpw, rhow)
 
 # Earth radius [m] and degrees->radians. Defined here rather than imported from an
 # advection module: they are universal constants, not transport parameters, and
@@ -264,7 +309,94 @@ ADV_METRIC = os.environ.get('ADV_METRIC', '1') != '0'
 # slab's vertical faces are OPEN, so the aerosol gains a real advective
 # source/sink there. That exchange is ~10%/day of the slab GROSS, so it is
 # diagnosed explicitly into the mass budget as the 'vflux' term.
-ADV_WCONT = os.environ.get('ADV_WCONT', '1') != '0'
+# Under ADV_SCHEME=sl with ADV_SL_VERT=sl (the handoff's 3-D design, A/B-failed)
+# the default is 0: that operator's column is CLOSED and mass-fixed, so the
+# exchange with the reservoir is the Dirichlet reset of the edge levels after
+# the step (BC_EDGE=clamp, booked in B_bc); ADV_WCONT=1 there leaves the edge
+# levels free with no exchange at all, and the header warns. The default
+# ADV_SL_VERT=flux (SL horizontal + fct_lr's flux-form vertical) has lr's open
+# faces and takes lr's default, 1.
+_SL_CLOSED = ADV_SCHEME == 'sl' and sl_lr.ADV_SL_VERT == 'sl'
+ADV_WCONT = os.environ.get('ADV_WCONT', '0' if _SL_CLOSED else '1') != '0'
+# sl and ffsl: ADV_SL_HOURLY=1 reads the hourly CESM winds between the two step
+# snapshots so each of the K sub-steps advects on its own hour's wind (~1.3 s/step
+# of extra I/O). Default 0 since 2026-10-15: the two step-end snapshots, linear
+# in time at every sub-step -- what lr always did, and the cadence production
+# receives (six-hourly winds from CESM today, from an atmospheric emulator later).
+# The hourly mode is a diagnostic; its value is ~3 % in number and forcing at
+# day 30 (docs/PROCESSES.md 1.9, wind cadence).
+ADV_SL_HOURLY = ADV_SCHEME in ('sl', 'ffsl') and os.environ.get('ADV_SL_HOURLY', '0') != '0'
+# ---- meteorology source (2026-11-05) -----------------------------------------
+# MET_SRC=cesm (default): U/V/OMEGA/T hourly from the CESM h1 archive, as always.
+# MET_SRC=file: the four fields at the two step ends from MET_DIR, written by
+# scripts/met/emu_to_met.py from a JCM-emulator free run regridded onto this
+# band and grid (format documented there; hour0 in its meta.json puts frame 0
+# on the archive's hour axis, so H0 + t indexes both the same way). Everything
+# the emulator cannot supply -- the aerosol IC/BC reservoirs, the gases, water
+# vapour, the radiation column below the band, the surface -- still comes from
+# the archive at the matching hour; docs/BOUNDARY_CONDITIONS.md is the plan for
+# replacing those with a climatology. The file holds only the step ends, so
+# ADV_SL_HOURLY is refused rather than silently fed interpolated winds.
+MET_SRC = os.environ.get('MET_SRC', 'cesm').lower()
+MET_DIR = os.environ.get('MET_DIR', '')
+# RH under MET_SRC=file. 'q' (default): the archive's water vapour at the hour
+# with the FILE's temperature, saturation over ICE (Goff-Gratch) -- because that
+# is what CESM's RELHUM is on these levels (checked 2026-11-05, hour 8766:
+# Q/qsat_ice / RELHUM = 1.001 median, 1.014 p95; over water it is 0.59), so the
+# water uptake and nucleation see the convention every CESM-driven run gave
+# them, now paired with the temperature that actually drives the run.
+# 'cesm': the archive's RELHUM as is (CESM's temperature paired with the file's).
+MET_RH = os.environ.get('MET_RH', 'q' if MET_SRC == 'file' else 'cesm').lower()
+if MET_SRC not in ('cesm', 'file'):
+    raise SystemExit(f"MET_SRC={MET_SRC!r} is not valid: cesm | file")
+if MET_SRC == 'file' and not MET_DIR:
+    raise SystemExit("MET_SRC=file needs MET_DIR (a scripts/met/emu_to_met.py output)")
+if MET_SRC == 'file' and ADV_SL_HOURLY:
+    raise SystemExit("ADV_SL_HOURLY=1 needs hourly winds; MET_SRC=file holds only the step ends")
+if MET_RH not in ('q', 'cesm'):
+    raise SystemExit(f"MET_RH={MET_RH!r} is not valid: q | cesm")
+# ---- boundary source (2026-11-05) ----------------------------------------------
+# BC_SRC=cesm (default): every non-meteorology field (aerosol IC/slabs/caps and
+# the anomaly-mode reference aerosol, SO2/H2SO4, Q/O3/CH4 and the surface for
+# the radiation column, RELHUM, OH) from the hourly archive at the hour.
+# BC_SRC=clim: the same fields from CLIM_FILE, a monthly day-of-year climatology
+# of the archive (scripts/met/make_bc_climatology.py), served through the same
+# open_var() interface by src/met/bc_clim.py; U/V/OMEGA/T come from the met
+# file, including the full radiation column T. The run then opens NO archive
+# file -- docs/BOUNDARY_CONDITIONS.md. Requires MET_SRC=file (the climatology
+# has no winds and must not be paired with the archive's T).
+BC_SRC = os.environ.get('BC_SRC', 'cesm').lower()
+CLIM_FILE = os.environ.get('CLIM_FILE', '')
+if BC_SRC not in ('cesm', 'clim'):
+    raise SystemExit(f"BC_SRC={BC_SRC!r} is not valid: cesm | clim")
+if BC_SRC == 'clim' and MET_SRC != 'file':
+    raise SystemExit("BC_SRC=clim needs MET_SRC=file: the climatology carries no winds")
+if BC_SRC == 'clim' and not CLIM_FILE:
+    raise SystemExit("BC_SRC=clim needs CLIM_FILE (a scripts/met/make_bc_climatology.py output)")
+# ADV_PASSIVE=1 (2026-11-05): the passive-tracer transport TEST. Instead of the
+# 80 bin moments, ONE tracer -- the total sulfate mass per cell -- is advected
+# (plus SO2 and H2SO4 as before), and every bin's number and mass in a cell is
+# then rescaled by the cell's mass ratio after/before, i.e. the size
+# distribution SHAPE of each cell is frozen through the transport step. A cell
+# that was empty and receives mass takes the pre-step zonal-mean shape of its
+# level (the global-mean shape of the level if the row is empty too). Transport
+# is linear and the SL scheme already shares the departure points across the
+# whole stack, so this is NOT a speed knob (the 82-tracer step costs under a
+# second); it measures what the per-bin transport does beyond moving the total:
+# plume and background distributions differ, and settling and coagulation make
+# the bins' spatial fields differ, so a run with this on is scored against the
+# same run with it off (the campaign's run 6 vs run 2). Not a production option.
+ADV_PASSIVE = os.environ.get('ADV_PASSIVE', '0') != '0'
+
+
+def qsat_ice(T, p):
+    """Saturation specific humidity over ice [kg/kg] from T [K], p [Pa]:
+    Goff-Gratch ice (CAM's GoffGratch_svp_ice), the formula behind CESM's
+    RELHUM on the band levels (see MET_RH above)."""
+    t0 = 273.16
+    es = 10.0 ** (-9.09718 * (t0 / T - 1.0) - 3.56654 * np.log10(t0 / T)
+                  + 0.876793 * (1.0 - T / t0) + np.log10(6.1071)) * 100.0
+    return 0.622 * es / np.maximum(p - 0.378 * es, 1.0)
 # AEROSOL concentration carried by air flowing INTO the slab through the bottom
 # face, as a scale on the reservoir (CARMA/MAM4) value there. This is a first-order
 # control on the aerosol budget: with the faces open, ~10%/day of the slab's air is
@@ -361,8 +493,27 @@ WET_OPTICS = os.environ.get('WET_OPTICS', '1') != '0'
 # APPEND-ONLY, same as INJ_CFG -- the check compares the common prefix, so adding a
 # field here does not lock out checkpoints written before it existed.
 PHYS_CFG = np.array([float(WET_SETTLING), float(WET_OPTICS), float(SETTLE_ENABLE),
-                     float(os.environ.get('ADV_VPOS', '1') != '0')])
-PHYS_CFG_KEYS = np.array(['WET_SETTLING', 'WET_OPTICS', 'SETTLE', 'ADV_VPOS'])
+                     float(os.environ.get('ADV_VPOS', '1') != '0'),
+                     # 2026-10-09: which engine fills the microphysics seam
+                     # (driver_fast.py MICRO_ENGINE; 0 = tomas_jax.fast, 1 = the
+                     # learned emulator). Appended, so older ckpts still resume.
+                     float(os.environ.get('MICRO_ENGINE', 'fast').lower() == 'emulator'),
+                     # 2026-10-13: semi-Lagrangian transport (ADV_SCHEME=sl). Appended.
+                     float(ADV_SCHEME == 'sl'),
+                     # 2026-10-13: which engine solves the evolved radiation call
+                     # (RAD_ENGINE; 0 = rrtmgp, 1 = the column networks). Appended.
+                     float(os.environ.get('RAD_ENGINE', 'rrtmgp').lower() == 'emulator'),
+                     # 2026-10-14: fct_lr at large Courant number (ADV_SCHEME=ffsl). Appended.
+                     float(ADV_SCHEME == 'ffsl'),
+                     # 2026-11-05: meteorology from a file, not the archive (MET_SRC=file). Appended.
+                     float(MET_SRC == 'file'),
+                     # 2026-11-05: boundaries from the climatology file (BC_SRC=clim). Appended.
+                     float(BC_SRC == 'clim'),
+                     # 2026-11-05: the passive-tracer transport test (ADV_PASSIVE). Appended.
+                     float(ADV_PASSIVE)])
+PHYS_CFG_KEYS = np.array(['WET_SETTLING', 'WET_OPTICS', 'SETTLE', 'ADV_VPOS',
+                          'MICRO_ENGINE=emulator', 'ADV_SCHEME=sl', 'RAD_ENGINE=emulator',
+                          'ADV_SCHEME=ffsl', 'MET_SRC=file', 'BC_SRC=clim', 'ADV_PASSIVE'])
 ALPHA_COND = float(os.environ.get('ALPHA_COND', '1.0'))  # H2SO4 accommodation coeff (SAI box-model value)
 # ---- diurnal OH from a solar-zenith-angle curve (Hanisco et al. 2001, Fig. 1) ----
 # DEFAULT ON. The SO2+OH chemistry uses OH(theta) read off the paper's figure
@@ -478,7 +629,41 @@ RAD_EVERY  = int(os.environ.get('RAD_EVERY', '1'))     # coupling steps between 
 # 'anomaly': dT/dt = HR(evolved bins, T+dT) - HR(reference MAM4 bins, T_CESM)
 # 'full'   : dT/dt = HR(evolved bins, T+dT)   (drifts toward radiative eq.;
 #            only meaningful once a dynamical core balances it)
+# 'flux'   : (2026-11-05, the no-feedback forcing mode) ONE solve per step with
+#            the evolved bins at the meteorology's own temperature; dT_rad stays
+#            0 and nothing feeds back. Fluxes and the absolute heating profile
+#            go to frames3d; the forcing is a difference taken AFTER the run
+#            against a paired run on the same meteorology (an injection run
+#            minus its no-injection control = the SAI forcing).
 RAD_MODE   = os.environ.get('RAD_MODE', 'anomaly')
+if RAD_MODE not in ('anomaly', 'full', 'flux'):
+    raise SystemExit(f"RAD_MODE={RAD_MODE!r} is not valid: anomaly | full | flux")
+# ---- radiation engine / reference cache / A-B / sampler (2026-10-13) ----
+# RAD_ENGINE  rrtmgp (default: the physics, byte-for-byte unchanged) | emulator
+#             (src/radiation/rad_emulator.py: a column network replaces the
+#             two-stream solve of the EVOLVED call only; docs/RADIATION.md).
+# RAD_REF     with RAD_ENGINE=emulator, ALSO run the physics on the same input
+#             every RAD_REF_EVERY steps and log the comparison (hr1, the anomaly,
+#             the TOA forcing, wall time of both) to rad_bench_<TAG>.npz. The run
+#             advances with the engine. Mirrors MICRO_REF.
+# RAD_REF_CACHE  directory of the per-archive-hour cache of the reference-
+#             aerosol solve (RAD_MODE=anomaly) and of the clear-sky fields the
+#             emulator needs (src/radiation/rad_cache.py). A hit is bit-identical
+#             to computing the field (float64 on disk, same code), a miss computes
+#             and stores it, so the default (on) changes no number -- only the
+#             cost: the reference solve AND its MAM4 re-binning are skipped on a
+#             hit (~5.6 of the 8.5 s stage). '0' disables.
+# RAD_SAMPLE_EVERY  write rad_sample_<TAG>_s<step>.npz (evolved bins, dT_rad,
+#             hour) every N radiation steps: training data for the emulator
+#             (scripts/radiation/label_columns.py). 0 = off.
+RAD_ENGINE = os.environ.get('RAD_ENGINE', 'rrtmgp').lower()
+RAD_REF    = os.environ.get('RAD_REF', '').lower()
+RAD_REF_EVERY = int(os.environ.get('RAD_REF_EVERY', '1'))
+RAD_REF_CACHE = os.environ.get('RAD_REF_CACHE',
+                               os.path.join(_paths.INPUTS, 'cache', 'rad_ref'))
+RAD_SAMPLE_EVERY = int(os.environ.get('RAD_SAMPLE_EVERY', '0'))
+if RAD_ENGINE not in ('rrtmgp', 'emulator'):
+    raise SystemExit(f"RAD_ENGINE={RAD_ENGINE!r} is not valid: rrtmgp | emulator")
 # ARF_toa is an INSTANTANEOUS TOA flux difference at the radiation call's own
 # solar time. Its SW part therefore swings with the diurnal cycle, and with the
 # default 6h step it is sampled 4x/day -- so a single sample's global mean
@@ -501,6 +686,12 @@ ARF_AVG_H  = float(os.environ.get('ARF_AVG_H', '24'))
 # The frames/timeseries ckpts are written in the SAME block, so all three are
 # always from the same step and restore consistently.
 STATE_CKPT = os.environ.get('STATE_CKPT', '1') != '0'
+# CKPT_EVERY_FRAMES=N (2026-11-09): write the three _ckpt files only every N-th frame (and at the last step) instead
+# of every frame. Output-only: the physics and the final coupled_* files are unchanged. Why: the frames ckpt holds the
+# whole frame history (14.5 GB after one year, growing), so rewriting it every frame put ~15 GB per run per model day
+# on /data NFS; six concurrent runs saturated it (write queue ~2.5 s/op) and the runs waited on it. A crash now loses
+# at most N frames. Default 1 = the previous behaviour.
+CKPT_EVERY_FRAMES = max(1, int(os.environ.get('CKPT_EVERY_FRAMES', '1')))
 RESUME     = os.environ.get('RESUME', '0') != '0'
 LOG_EVERY  = int(os.environ.get('LOG_EVERY', '1'))    # progress line every N steps
 FRAME_EVERY = int(os.environ.get('FRAME_EVERY', '24'))  # save size-bin snapshot every N hours
@@ -518,6 +709,15 @@ FRAME_EVERY = int(os.environ.get('FRAME_EVERY', '24'))  # save size-bin snapshot
 # It ADDS to the probe slabs rather than replacing them so every existing figure
 # keeps reading exactly what it always read.
 FRAME_LEVELS = os.environ.get('FRAME_LEVELS', 'probe').lower()
+# FRAME3D=1 (2026-11-05): the FULL 3-D state and its per-cell size statistics
+# after EVERY coupling step, one uncompressed frames3d/step_<s>.npz per step
+# (~480 MB at 24 levels: 40 Nk + 40 Mk + SO2 + H2SO4 + dT_rad + 6 derived 3-D
+# fields + the 2-D radiation fields; ~700 GB per model year). Independent of
+# FRAME_EVERY/FRAME_LEVELS, which keep writing the probe/zonal frames. The
+# campaign that asked for it: every cell, every time stamp, the bins, the
+# gases, mean/sigma/effective diameter, total number and mass, AOD, dT and
+# the TOA fluxes (absolute net, and the aerosol forcing vs the reference).
+FRAME3D = os.environ.get('FRAME3D', '0') != '0'
 if FRAME_LEVELS not in ('probe', 'all'):
     raise SystemExit(f"FRAME_LEVELS={FRAME_LEVELS!r} is not valid: "
                      "use 'probe' (single PROBE_HPA level) or 'all' "
@@ -1355,6 +1555,20 @@ def savez_atomic(path, **arrays):
 # =========================================================================
 # CESM I/O
 # =========================================================================
+def rad_ref_src():
+    """The part of the radiation reference-cache key that describes the
+    REFERENCE AEROSOL (aer_fill): source and binning. One function so the
+    run (main) and scripts/radiation/build_ref_cache.py agree on the key."""
+    d = dict(AER_SRC=AER_SRC)
+    if AER_SRC == 'mam4':
+        d.update(INIT_BIN=_INIT_BIN,
+                 MAM_SIGMA=[float(MAM_SIGMA[m]) for m in (1, 2, 3)])
+    else:
+        d.update(CARMA_FILE=os.path.basename(CARMA_FILE), CARMA_FRAME=CARMA_FRAME,
+                 CARMA_RHO=CARMA_RHO, CARMA_SUBBIN=CARMA_SUBBIN)
+    return d
+
+
 def open_var(var):
     fn = f'{H1}.{var}{SUF_H}'
     # Say which knob is wrong, once, instead of letting xarray raise a bare
@@ -1392,7 +1606,14 @@ def main():
                   f"({os.path.getsize(_stale)/1e9:.2f} GB) from an earlier crash",
                   flush=True)
             os.remove(_stale)
-    print("=== opening CESM h1 datasets ===", flush=True)
+    global open_var
+    if BC_SRC == 'clim':
+        import bc_clim
+        _clim = bc_clim.ClimArchive(CLIM_FILE, MET_DIR)
+        open_var = _clim.open_var
+        print(f"=== BC_SRC=clim: no archive files; {_clim.describe()} ===", flush=True)
+    else:
+        print("=== opening CESM h1 datasets ===", flush=True)
     dU = open_var('U'); dV = open_var('V'); dW = open_var('OMEGA')
     dT = open_var('T')
     ds_mam = {f'{p}_a{m}': open_var(f'{p}_a{m}')
@@ -1450,6 +1671,17 @@ def main():
         rad = radiation.RadiationDriver(open_var, klevs, lat, lon,
                                         DP_BIN * 1e-9,
                                         mmid_kg=MMID, rho_dry=RHO_AER)
+        if RAD_REF_CACHE not in ('0', ''):
+            import rad_cache
+            rad.ref_cache = rad_cache.RefCache(RAD_REF_CACHE, rad.cache_key(**rad_ref_src()))
+            print(f"  reference cache: {rad.ref_cache.dir}", flush=True)
+        if RAD_ENGINE == 'emulator':
+            import rad_emulator
+            rad = rad_emulator.RadEmulator(rad, ref_engine=RAD_REF,
+                                           ref_every=RAD_REF_EVERY, tag=OUT_TAG)
+        print(f"  RAD_ENGINE={RAD_ENGINE} RAD_REF={RAD_REF or '-'} "
+              f"RAD_REF_EVERY={RAD_REF_EVERY} RAD_REF_CACHE={RAD_REF_CACHE} "
+              f"RAD_SAMPLE_EVERY={RAD_SAMPLE_EVERY}", flush=True)
     #change in temperature from radiation intialized here    
     dT_rad = jnp.zeros((nlev, nlat, nlon), dtype=jnp.float64)
 
@@ -1458,6 +1690,15 @@ def main():
         v = dV['V'].isel(time=H0 + t, lev=klevs).values
         w = dW['OMEGA'].isel(time=H0 + t, lev=klevs).values
         return u, v, w
+
+    def winds_block(t0, t1):
+        """winds(t) for t0..t1 inclusive as one slab read per variable: the h1
+        files hold one time step per chunk, so this only saves the per-call
+        overhead (~25 %: 1.5 s vs 2.0 s for 7 hours), not the decompression.
+        Returns a list of (u, v, w) tuples, hour by hour. SL path only."""
+        blk = [d[v].isel(time=slice(H0 + t0, H0 + t1 + 1), lev=klevs).values
+               for d, v in ((dU, 'U'), (dV, 'V'), (dW, 'OMEGA'))]
+        return [tuple(b[i] for b in blk) for i in range(t1 - t0 + 1)]
 
     def temp(t):
         return dT['T'].isel(time=H0 + t, lev=klevs).values
@@ -1473,6 +1714,64 @@ def main():
         """CESM RELHUM (percent) -> fraction, clipped to [0,1]."""
         return np.clip(dRH['RELHUM'].isel(time=H0 + t, lev=klevs).values / 100.0,
                        0.0, 1.0)
+
+    if MET_SRC == 'file':
+        # The four meteorology readers above, re-pointed at MET_DIR (see the
+        # MET_SRC note at the top). The file is checked against THIS run's grid
+        # and band, and every hour the loop asks for must be one of its frames.
+        import json
+        with open(os.path.join(MET_DIR, 'meta.json')) as _f:
+            met_meta = json.load(_f)
+        met = {k: np.load(os.path.join(MET_DIR, f'{k}.npy'), mmap_mode='r')
+               for k in ('u', 'v', 'omega', 'T')}
+        _mk = [int(k) for k in met_meta['klevs']]
+        if _mk != [int(k) for k in klevs]:
+            raise SystemExit(f"MET_DIR band levels {_mk[0]}..{_mk[-1]} != this run's "
+                             f"{klevs[0]}..{klevs[-1]}: rebuild it with the same P_LO_HPA/P_HI_HPA")
+        if not (np.allclose(met_meta['lat'], lat) and np.allclose(met_meta['lon'], lon)):
+            raise SystemExit("MET_DIR lat/lon differ from the archive grid")
+        MET_H0 = int(met_meta['hour0']); MET_STEP = int(met_meta['step_hours'])
+        MET_N = int(met_meta['nframe'])
+        if MET_STEP != STEP_HOURS:
+            raise SystemExit(f"MET_DIR step {MET_STEP} h != STEP_HOURS {STEP_HOURS}")
+        if (H0 - MET_H0) % MET_STEP:
+            raise SystemExit(f"H0={H0} is not on the MET file's {MET_STEP}-h grid (hour0 {MET_H0})")
+        _need = (H0 + N_HOURS - MET_H0) // MET_STEP
+        if H0 < MET_H0 or _need >= MET_N:
+            raise SystemExit(f"run needs MET frames {(H0-MET_H0)//MET_STEP}..{_need} but the file "
+                             f"holds 0..{MET_N-1} (hour0 {MET_H0}); shorten N_HOURS or extend the file")
+
+        def met_frame(t):
+            h = H0 + t
+            if (h - MET_H0) % MET_STEP:
+                raise SystemExit(f"hour {h} is not on the MET file's {MET_STEP}-h grid")
+            i = (h - MET_H0) // MET_STEP
+            if not 0 <= i < MET_N:
+                raise SystemExit(f"hour {h} = MET frame {i}, outside 0..{MET_N-1}")
+            return i
+
+        def winds(t):
+            i = met_frame(t)
+            return (np.array(met['u'][i]), np.array(met['v'][i]), np.array(met['omega'][i]))
+
+        def winds_block(t0, t1):
+            raise RuntimeError('hourly winds are not available under MET_SRC=file')
+
+        def temp(t):
+            return np.array(met['T'][met_frame(t)])
+
+        if MET_RH == 'q':
+            dQ = open_var('Q')
+
+            def relhum(t):
+                q = dQ['Q'].isel(time=H0 + t, lev=klevs).values
+                return np.clip(q / qsat_ice(temp(t).astype(np.float64), pres3d), 0.0, 1.0)
+        print(f"  MET_SRC=file: {MET_DIR}\n"
+              f"    {MET_N} frames x {MET_STEP} h from archive hour {MET_H0} "
+              f"({met_meta.get('t0')}), source {met_meta.get('source')}; U/V/OMEGA/T from the file, "
+              f"RH = {'archive Q with the file T, over ice' if MET_RH == 'q' else 'archive RELHUM'}; "
+              f"gases, reservoirs, surface and the radiation column below the band from the archive",
+              flush=True)
 
     # SZA-parabola OH grids (built once; SZA is lat/lon/time only, not level)
     _lat2d = jnp.asarray(lat)[:, None]                 # (nlat,1)
@@ -1529,6 +1828,13 @@ def main():
             return bin_mam4(ds_mam, t, levs, lat_idx)
     else:
         raise SystemExit(f"  ERROR: AER_SRC must be 'mam4' or 'carma', got {AER_SRC!r}")
+    # the radiation anomaly reference is ALWAYS the binned archive aerosol
+    # (radiation.py integrates per-bin Mie tables); the prognostic state may be
+    # something else (driver_mam4.py: modes, via AER_FILL_FN)
+    aer_fill_rad = aer_fill
+    if AER_FILL_FN is not None:
+        def aer_fill(t, levs, lat_idx=None):
+            return AER_FILL_FN(ds_mam, t, levs, lat_idx)
     #bin aerosol onto TOMAS grid (source per AER_SRC)
     num, mas = aer_fill(0, klevs)
     num = jnp.asarray(num, dtype=jnp.float64)
@@ -1537,8 +1843,9 @@ def main():
     so2_g, h2so4_g = read_gases(ds_gas, 0, klevs)
     so2   = jnp.asarray(so2_g,   dtype=jnp.float64)
     h2so4 = jnp.asarray(h2so4_g, dtype=jnp.float64)
-    ntr = 2 * NBINS + 2   # 80 bin moments + SO2 + H2SO4
-    print(f"  bins={NBINS}, advected tracers={ntr}, "
+    NA = AER_NROWS        # aerosol rows per moment (40 bins, or 4 modes)
+    ntr = 2 * NA + 2      # 2*NA aerosol rows + SO2 + H2SO4
+    print(f"  bins={NBINS}, aerosol rows/moment={NA}, advected tracers={ntr}, "
           f"init N burden(sum num)={float(num.sum()):.3e}, "
           f"M burden(sum mas)={float(mas.sum()):.3e}", flush=True)
 
@@ -1549,7 +1856,7 @@ def main():
     # apply the bottom-face aerosol inflow scaling to step 0 as well (the per-step
     # refresh below only takes effect from the end of step 0 onward)
     if ADV_WCONT and BC_BOT_AER != 1.0:
-        qfroz = qfroz.at[:2*NBINS, -N_BC_BOT:].multiply(BC_BOT_AER)
+        qfroz = qfroz.at[:2*NA, -N_BC_BOT:].multiply(BC_BOT_AER)
     pol_idx = np.where(np.abs(lat) > LAT_FREEZE)[0]
 
     # open-BC slab levels (native indices into the h1 lev axis)
@@ -1817,6 +2124,13 @@ def main():
                  f"({_arf_win * STEP_HOURS * RAD_EVERY}h) mean"
                  if _arf_win > 1 else " (NO diurnal averaging: ARF_AVG_H=0)"),
               flush=True)
+        if getattr(rad, 'arf_exact', False) and RAD_REF_EVERY > 1 and _arf_win > 1:
+            print(f"  WARNING: RAD_EMU_ARF=exact samples the forcing only every "
+                  f"RAD_REF_EVERY={RAD_REF_EVERY} steps, so the {_arf_win}-finite-sample "
+                  f"arf_toa_avg spans {_arf_win * STEP_HOURS * RAD_EVERY * RAD_REF_EVERY}h, "
+                  f"not {_arf_win * STEP_HOURS * RAD_EVERY}h as in a physics run: do not "
+                  f"compare arf_toa_avg across such runs (compare arf_toa at matching hours "
+                  f"or rad_bench's arf_emu/arf_phys). RAD_EMU_ARF=emu avoids this.", flush=True)
     clip_add_cum = 0.0; clip_rem_cum = 0.0   # cumulative clip mass (burden units)
     nfloor_cum = 0.0   # cumulative NUMBER manufactured by the post-advection floor
     inj_cum = 0.0      # cumulative injected SO2 (burden units, gas budget)
@@ -1890,7 +2204,8 @@ def main():
           f"{np.round(PLEV_PA[-N_BC_BOT:]/100, 1)} hPa: "
           + ("FLUX (continuity omega, open faces; aerosol inflow at the "
              f"{_res} reservoir, free outflow)" if ADV_WCONT
-             else "sealed faces (legacy omega)")
+             else ("closed column (SL), exchange = the edge-level reset"
+                   if _SL_CLOSED else "sealed faces (legacy omega)"))
           + (f"; aerosol edge levels {'left free' if _edge == 'open' else 'CLAMPED to '+_res}")
           + f"; gases {_gas} at the edges; "
           + (f"polar caps (|lat|>{LAT_FREEZE}, {pol_idx.size} rows) "
@@ -1902,7 +2217,21 @@ def main():
              if ADV_WCONT else "")
           + f"; y-metric {'on' if ADV_METRIC else 'OFF'}, "
           + f"dx-fix {'on' if os.environ.get('ADV_DXFIX','1') != '0' else 'OFF'}; "
-          + "NO mass fixer (open system)", flush=True)
+          + ("per-tracer mass fixer on the closed extended column" if _SL_CLOSED
+             else "per-level SL fixer + column fixer to the face-flux target (SL split)"
+             if ADV_SCHEME == 'sl' else "NO mass fixer (open system)"), flush=True)
+    if ADV_SCHEME == 'ffsl':
+        print(f"  TRANSPORT: {ffsl_lr.describe()}; winds = "
+              + ("hourly CESM snapshots at the sub-step midpoints" if ADV_SL_HOURLY
+                 else "the two step snapshots interpolated in time"), flush=True)
+    if ADV_SCHEME == 'sl':
+        print(f"  TRANSPORT: {sl_lr.describe()}; winds = "
+              + ("hourly CESM snapshots resampled to the sub-steps" if ADV_SL_HOURLY
+                 else "the two bracketing snapshots, linear in time")
+              + ("\n  WARNING: ADV_WCONT=1 with ADV_SL_VERT=sl: that column is closed, "
+                 "so with the edge levels left free (BC_EDGE=open) the band cannot "
+                 "exchange with the reservoir at all. Use ADV_WCONT=0."
+                 if ADV_WCONT and _SL_CLOSED else ""), flush=True)
     print(f"  probe/frames at {PLEV_PA[KPROBE]/100:.1f} hPa"
           + ("; FRAME_LEVELS=all -> plus a zonal-mean frame at all "
              f"{nlev} levels ({PLEV_PA[0]/100:.1f}-{PLEV_PA[-1]/100:.1f} hPa)"
@@ -1935,7 +2264,7 @@ def main():
         _ck = np.load(_state_f, allow_pickle=False)
         _fp = (int(_ck['nbins']), int(_ck['nlev']), int(_ck['nlat']),
                int(_ck['nlon']), int(_ck['step_hours']))
-        _now = (NBINS, nlev, nlat, nlon, STEP_HOURS)
+        _now = (NA, nlev, nlat, nlon, STEP_HOURS)
         if _fp != _now:
             raise SystemExit(f"  RESUME refused: checkpoint geometry {_fp} != "
                              f"this run's {_now} (bins,lev,lat,lon,step_hours)")
@@ -2197,6 +2526,10 @@ def main():
         tw = time.time()
         #these winds will eventually be used to advect the tracers from it0 to it1 using advection scheme
         u1, v1, w1 = winds(it1)
+        if ADV_SL_HOURLY:
+            # the hourly snapshots between the two step ends, for the SL
+            # sub-steps (sl_lr resamples them onto its K sub-step nodes)
+            hourly = ([(u0, v0, w0)] + winds_block(it0 + 1, it1 - 1) + [(u1, v1, w1)])
         t_read = time.time() - tw
 
         # ---- 0. SAI source: continuous SO2 release into the injection cell(s) ----
@@ -2219,12 +2552,27 @@ def main():
         # shared, so the whole 82-row stack advects in one batch)
         ta = time.time()
         # add all tracers and advect them together
-        qb = jnp.concatenate([num, mas, so2[None], h2so4[None]], axis=0)
+        if ADV_PASSIVE:
+            # the test: total sulfate mass as the one aerosol tracer (see ADV_PASSIVE)
+            _num0 = num; _mas0 = mas
+            _mt0 = mas.sum(axis=0)
+            qb = jnp.concatenate([_mt0[None], so2[None], h2so4[None]], axis=0)
+            _qfroz_full = qfroz
+            qfroz = jnp.concatenate([qfroz[NA:2*NA].sum(axis=0)[None],
+                                     qfroz[2*NA][None], qfroz[2*NA + 1][None]], axis=0)
+        else:
+            qb = jnp.concatenate([num, mas, so2[None], h2so4[None]], axis=0)
         ntr_all = qb.shape[0]
         step = TRACER_CHUNK if (0 < TRACER_CHUNK < ntr_all) else ntr_all
         akw = dict(lat=lat, dp=DP, lat_freeze=LAT_FREEZE, dt_total=STEP_SEC)
         if ADV_VFLUX:
             akw['return_vflux'] = True
+        if ADV_SCHEME == 'sl':
+            # the SL vertical coordinate is the true level pressure (omega is
+            # Pa/s); DP alone does not reconstruct it on log-spaced levels
+            akw['plev'] = PLEV_PA
+        if ADV_SL_HOURLY:
+            akw['hourly_winds'] = hourly
         if step == ntr_all:
             out = advect_step_batch(qb, u0, v0, w0, u1, v1, w1,
                                     qfrozb=qfroz, **akw)
@@ -2256,12 +2604,36 @@ def main():
         # diagnostic cannot answer that question.
         # Aerosol MASS rows only (NBINS:2*NBINS) -- gases are budgeted separately.
         if vfl is not None:
-            vf_in = float((vfl[NBINS:2*NBINS, 0] * AF_j).sum())
-            vf_out = float((vfl[NBINS:2*NBINS, 1] * AF_j).sum())
+            if ADV_PASSIVE:
+                vf_in = float((vfl[0, 0] * AF_j).sum()); vf_out = float((vfl[0, 1] * AF_j).sum())
+            else:
+                vf_in = float((vfl[NA:2*NA, 0] * AF_j).sum())
+                vf_out = float((vfl[NA:2*NA, 1] * AF_j).sum())
         else:
             vf_in = vf_out = 0.0
-        num = qb[:NBINS]; mas = qb[NBINS:2*NBINS]
-        so2 = qb[2*NBINS]; h2so4 = qb[2*NBINS + 1]
+        if ADV_PASSIVE:
+            _mt1 = jnp.maximum(qb[0], 0.0)
+            so2 = qb[1]; h2so4 = qb[2]
+            qfroz = _qfroz_full
+            _had = _mt0 > 0.0
+            _ratio = jnp.where(_had, _mt1 / jnp.where(_had, _mt0, 1.0), 0.0)
+            # shapes for cells that were empty: per-bin fraction of the level's
+            # zonal-mean mass (number per unit mass likewise), global-level fallback
+            _mz = _mas0.sum(axis=3, keepdims=True); _nz = _num0.sum(axis=3, keepdims=True)
+            _mtz = _mz.sum(axis=0, keepdims=True)
+            _mg = _mas0.sum(axis=(2, 3), keepdims=True); _ng = _num0.sum(axis=(2, 3), keepdims=True)
+            _mtg = _mg.sum(axis=0, keepdims=True)
+            _rowok = _mtz > 0.0
+            _fm = jnp.where(_rowok, _mz / jnp.where(_rowok, _mtz, 1.0),
+                            _mg / jnp.maximum(_mtg, 1e-300))               # (NBINS,nlev,nlat,1)
+            _fn = jnp.where(_rowok, _nz / jnp.where(_rowok, _mtz, 1.0),
+                            _ng / jnp.maximum(_mtg, 1e-300))               # number per kg sulfate
+            mas = jnp.where(_had[None], _mas0 * _ratio[None], _fm * _mt1[None])
+            num = jnp.where(_had[None], _num0 * _ratio[None], _fn * _mt1[None])
+            del _num0, _mas0
+        else:
+            num = qb[:NA]; mas = qb[NA:2*NA]
+            so2 = qb[2*NA]; h2so4 = qb[2*NA + 1]
         # post-advection, pre-floor: separates transport (non-polar) from the
         # polar-cap overwrite (both happen inside advect_step_batch)
         M_adv = Mbur(mas); M_adv_np = Mbur(mas, 'np'); M_adv_pol = Mbur(mas, 'pol')
@@ -2365,7 +2737,7 @@ def main():
                 _dpw, _rhow = settling.wet_size_field(MMID, _wt3d, RHO_AER)
             else:
                 _dpw, _rhow = jnp.asarray(DP_BIN * 1e-9), RHO_AER
-            num, mas, out_n, out_m = settling.settle_step(
+            num, mas, out_n, out_m = aer_settle(
                 num, mas, jnp.asarray(T3d), jnp.asarray(pres3d),
                 jnp.asarray(DP), STEP_SEC, _dpw, _rhow)
             # out_m is q*dp units per (bin,lat,lon); weighting by the latitude
@@ -2471,15 +2843,15 @@ def main():
         # scaling on the bottom face at high latitudes.
         if ADV_WCONT:
             num_r, mas_r = aer_fill(it1, lev_top)
-            qfroz = qfroz.at[:NBINS, :N_BC_TOP].set(jnp.asarray(num_r))
-            qfroz = qfroz.at[NBINS:2*NBINS, :N_BC_TOP].set(jnp.asarray(mas_r))
+            qfroz = qfroz.at[:NA, :N_BC_TOP].set(jnp.asarray(num_r))
+            qfroz = qfroz.at[NA:2*NA, :N_BC_TOP].set(jnp.asarray(mas_r))
             num_r, mas_r = aer_fill(it1, lev_bot)
-            qfroz = qfroz.at[:NBINS, -N_BC_BOT:].set(jnp.asarray(num_r) * BC_BOT_AER)
-            qfroz = qfroz.at[NBINS:2*NBINS, -N_BC_BOT:].set(jnp.asarray(mas_r) * BC_BOT_AER)
-            qfroz = qfroz.at[2*NBINS, :N_BC_TOP].set(jnp.asarray(so2_top))
-            qfroz = qfroz.at[2*NBINS+1, :N_BC_TOP].set(jnp.asarray(h2so4_top))
-            qfroz = qfroz.at[2*NBINS, -N_BC_BOT:].set(jnp.asarray(so2_bot))
-            qfroz = qfroz.at[2*NBINS+1, -N_BC_BOT:].set(jnp.asarray(h2so4_bot))
+            qfroz = qfroz.at[:NA, -N_BC_BOT:].set(jnp.asarray(num_r) * BC_BOT_AER)
+            qfroz = qfroz.at[NA:2*NA, -N_BC_BOT:].set(jnp.asarray(mas_r) * BC_BOT_AER)
+            qfroz = qfroz.at[2*NA, :N_BC_TOP].set(jnp.asarray(so2_top))
+            qfroz = qfroz.at[2*NA+1, :N_BC_TOP].set(jnp.asarray(h2so4_top))
+            qfroz = qfroz.at[2*NA, -N_BC_BOT:].set(jnp.asarray(so2_bot))
+            qfroz = qfroz.at[2*NA+1, -N_BC_BOT:].set(jnp.asarray(h2so4_bot))
 
         if PROFILE:
             print(f"  [prof] s={s} bc+polar={time.time()-tb:.2f}s", flush=True)
@@ -2496,12 +2868,33 @@ def main():
             #radiation timestep
             dt_rad_sec = STEP_SEC * RAD_EVERY
             #when initial state is perturbed
+            # training-data sampler: the evolved bins and the dT_rad the
+            # radiation is about to see (T_eff = T_CESM + dT_rad), at hour it1
+            if RAD_SAMPLE_EVERY and ((s + 1) // RAD_EVERY) % RAD_SAMPLE_EVERY == 0:
+                savez_atomic(f'rad_sample_{OUT_TAG}_s{s:04d}.npz',
+                             num=np.asarray(aer_to_bins(num, mas)[0], np.float32),
+                             dT_rad=np.asarray(dT_rad, np.float32),
+                             hour_abs=np.int64(H0 + it1), step=np.int64(s),
+                             klevs=np.array(klevs), plev_pa=PLEV_PA,
+                             inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS)
             if RAD_MODE == 'anomaly':
-                num_ref, _ = aer_fill(it1, klevs)
+                # the reference aerosol is re-binned from MAM4 only when the
+                # hour's reference solve is NOT already in the cache (a hit
+                # serves the stored, bit-identical fields and needs no bins)
+                # under MET_SRC=file the band temperature of BOTH calls is the
+                # file's (the archive's T would put a (T_file - T_CESM) Planck
+                # term into the anomaly); the reference solve is then not an
+                # archive-only quantity and is never served from the cache
+                T_met_band = temp(it1) if MET_SRC == 'file' else None
+                if T_met_band is None and rad.ref_ready(H0 + it1):
+                    num_ref = None
+                else:
+                    num_ref, _ = aer_fill_rad(it1, klevs)
+                    num_ref = jnp.asarray(num_ref)
                 #compute the heating anomaly with the current aerosol and heating states relative to the reference value
                 #hr_anom = HR(num)-HR(num_ref)
                 hr_anom, drad1, drad0 = rad.heating_anomaly(
-                    H0 + it1, num, jnp.asarray(num_ref), dT_rad)
+                    H0 + it1, aer_to_bins(num, mas)[0], num_ref, dT_rad, T_band=T_met_band)
                 #update the heating increment for the next step's coagulation
                 dT_rad = dT_rad + hr_anom * dt_rad_sec
                 # aerosol radiative effect at TOA (evolved - reference), W/m2,
@@ -2522,10 +2915,19 @@ def main():
                 #AOD area weighted with the perturbed aerosol
                 aod_gm = float((np.asarray(drad1['aod550']) * w_lat).sum()
                                / w_lat.sum())
+            elif RAD_MODE == 'flux':
+                # no feedback: the evolved aerosol at the meteorology's own
+                # temperature, dT_rad untouched (stays 0); see RAD_MODE
+                T_met_band = temp(it1) if MET_SRC == 'file' else None
+                hr_flux, drad1 = rad.heating(H0 + it1, aer_to_bins(num, mas)[0],
+                                             T_band_override=T_met_band, split=True)
+                w_lat = W_LAT[:, None] * np.ones((nlat, nlon))
+                aod_gm = float((np.asarray(drad1['aod550']) * w_lat).sum()
+                               / w_lat.sum())
             #when initial state is not perturbed, just compute the heating and update the temperature increment
             else:                                     # 'full'
                 T_eff_band = temp(it1) + np.asarray(dT_rad)
-                hr, drad1 = rad.heating(H0 + it1, num,
+                hr, drad1 = rad.heating(H0 + it1, aer_to_bins(num, mas)[0],
                                         T_band_override=T_eff_band)
                 dT_rad = dT_rad + hr * dt_rad_sec
                 # W_LAT, not plain cos(lat): same area metric as A_j and the
@@ -2552,8 +2954,9 @@ def main():
             #total number and mass burdens (weighted by A_j) at the end of this step
             Nb, Mb = burdens(num, mas)
             Nbi, Mbi = burdens_int(num, mas)
-            #num and mas pulled back to numpy
-            num_np = np.asarray(num); mas_np = np.asarray(mas)
+            #num and mas pulled back to numpy, as TOMAS bins (the size statistics are per bin)
+            _nb, _mb = aer_to_bins(num, mas)
+            num_np = np.asarray(_nb); mas_np = np.asarray(_mb)
             # number and mass at probe level (selected level)
             n_lev = num_np[:, KPROBE]; m_lev = mas_np[:, KPROBE]
             tot_n = n_lev.sum(0); tot_m = m_lev.sum(0)
@@ -2718,6 +3121,61 @@ def main():
                       f"settled_cum {settle_cum:.3e} "
                       f"(={settle_cum/M0:+.2e} M0)", flush=True)
 
+        if FRAME3D:
+            # Per-cell size statistics of the DRY bin grid (DP_BIN is the bin
+            # diameter the moments are defined on): geometric number-mean
+            # diameter, its geometric standard deviation, the mass-weighted
+            # geometric mean, and the WET effective diameter <N Dw^3>/<N Dw^2>
+            # on the H2SO4/H2O droplet (settling.wet_size_field, the same size
+            # the optics and the settling see; dry when WET_OPTICS=0) -- the
+            # per-cell version of the probe-level reff_nm in the timeseries.
+            _n3b, _m3b = aer_to_bins(num, mas)
+            _n3 = np.asarray(_n3b, np.float64); _m3 = np.asarray(_m3b, np.float64)
+            _ntot = _n3.sum(axis=0); _mtot = _m3.sum(axis=0)
+            _lnD = np.log(DP_BIN)[:, None, None, None]                 # ln nm
+            _nw = np.maximum(_ntot, 1e-300)
+            _lndg = (_n3 * _lnD).sum(axis=0) / _nw
+            _sig = np.exp(np.sqrt(np.maximum((_n3 * (_lnD - _lndg) ** 2).sum(axis=0) / _nw, 0.0)))
+            _lndm = (_m3 * _lnD).sum(axis=0) / np.maximum(_mtot, 1e-300)
+            if WET_OPTICS:
+                _wt3 = settling.equilibrium_wt_field(T3d, rh3d)
+                _dw3 = np.asarray(settling.wet_size_field(MMID, _wt3, RHO_AER)[0])   # (NBINS,nlev,nlat,nlon) m
+            else:
+                _dw3 = np.broadcast_to((DP_BIN * 1e-9)[:, None, None, None], _n3.shape)
+            _deff = (_n3 * _dw3 ** 3).sum(axis=0) / np.maximum((_n3 * _dw3 ** 2).sum(axis=0), 1e-300)
+            _has = _ntot > 0
+            _f3 = dict(step=np.int64(s), hour_abs=np.int64(H0 + it1), hour=np.int64(it1),
+                       num=np.asarray(num, np.float32), mas=np.asarray(mas, np.float32),
+                       so2=np.asarray(so2, np.float32), h2so4=np.asarray(h2so4, np.float32),
+                       dT_rad=np.asarray(dT_rad, np.float32),
+                       ntot=_ntot.astype(np.float32), mtot=_mtot.astype(np.float32),
+                       dg_num_nm=np.where(_has, np.exp(_lndg), 0.0).astype(np.float32),
+                       sigma_g=np.where(_has, _sig, 0.0).astype(np.float32),
+                       dg_mass_nm=np.where(_mtot > 0, np.exp(_lndm), 0.0).astype(np.float32),
+                       deff_wet_nm=np.where(_has, _deff * 1e9, 0.0).astype(np.float32),
+                       plev_pa=PLEV_PA, lat=lat, lon=lon, dp_bin_nm=DP_BIN,
+                       units=np.array('num #/kg per bin; mas kg(SO4)/kg per bin; so2,h2so4 kg/kg; dT_rad K; '
+                                      'ntot #/kg; mtot kg/kg; diameters nm (dg_* dry on DP_BIN, deff wet droplet); '
+                                      'aod550 -; toa_* W/m2 (net = sw_dn - sw_up - olr of the evolved call, '
+                                      'arf = up_ref - up_evolved, positive = net warming by the aerosol)'))
+            if rad is not None and (s + 1) % RAD_EVERY == 0:
+                _d1 = {k: np.asarray(drad1[k], np.float32) for k in ('sw_dn_toa', 'sw_up_toa', 'olr', 'aod550')}
+                _f3.update(aod550=_d1['aod550'], toa_sw_dn=_d1['sw_dn_toa'],
+                           toa_net_abs=_d1['sw_dn_toa'] - _d1['sw_up_toa'] - _d1['olr'])
+                if RAD_MODE == 'flux':
+                    # everything a paired difference needs (W/m2; K/day on the band)
+                    _f3.update(toa_sw_up=_d1['sw_up_toa'], toa_olr=_d1['olr'],
+                               sfc_sw_dn=np.asarray(drad1['sw_dn_sfc'], np.float32),
+                               sfc_lw_dn=np.asarray(drad1['lw_dn_sfc'], np.float32),
+                               hr_kday=(np.asarray(hr_flux) * 86400.0).astype(np.float32),
+                               hr_sw_kday=(np.asarray(drad1['hr_sw_band']) * 86400.0).astype(np.float32))
+                if RAD_MODE == 'anomaly':
+                    _f3['toa_arf'] = ((np.asarray(drad0['sw_up_toa'], np.float32) + np.asarray(drad0['olr'], np.float32))
+                                      - (_d1['sw_up_toa'] + _d1['olr']))
+            os.makedirs('frames3d', exist_ok=True)
+            savez_atomic(f'frames3d/step_{s:04d}.npz', **_f3)
+            del _n3, _m3, _dw3, _f3
+
         if (s + 1) % FRAME_EVERY_STEPS == 0 or s == N_STEPS - 1:
             frames_num.append(np.asarray(num[:, KPROBE]).copy())
             frames_mas.append(np.asarray(mas[:, KPROBE]).copy())
@@ -2732,45 +3190,46 @@ def main():
             # one probe-level slab) so partial results survive an early stop.
             # ALL THREE writes below are atomic (savez_atomic) -- plain np.savez
             # here cost the prod1yr frames history to an OOM kill mid-write.
-            savez_atomic(f'coupled_frames_{OUT_TAG}_ckpt.npz',
-                     frame_hours=np.array(frame_hours),
-                     frames_num=np.stack(frames_num), frames_mas=np.stack(frames_mas),
-                     frames_dT=np.stack(frames_dT),
-                     frames_so2=np.stack(frames_so2),
-                     frames_h2so4=np.stack(frames_h2so4),
-                     probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
-                     # the vertical/horizontal axes, so a zonal frame is
-                     # plottable from this file alone rather than needing the
-                     # final state beside it
-                     plev_pa=PLEV_PA, lat=lat, **_zm_arrays())
-            savez_atomic(f'coupled_timeseries_{OUT_TAG}_ckpt.npz', N0=N0, M0=M0,
-                     inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
-                     phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
-                     **{k: np.array(v) for k, v in ts.items()})
-            # full 3-D prognostic state + every cumulative counter, so RESUME=1
-            # can pick the run up from here. Written LAST, so the state is never
-            # newer than the frames/ts it is meant to agree with -- a kill between
-            # the writes leaves them AHEAD of the state instead, which the RESUME
-            # branch trims back (see 'frames/ts ahead of the state' there).
-            if STATE_CKPT:
-                savez_atomic(f'coupled_state_{OUT_TAG}_ckpt.npz',
-                         s_done=s, nbins=NBINS, nlev=nlev, nlat=nlat, nlon=nlon,
-                         step_hours=STEP_HOURS,
-                         num=np.asarray(num), mas=np.asarray(mas),
-                         so2=np.asarray(so2), h2so4=np.asarray(h2so4),
-                         dT_rad=np.asarray(dT_rad),
-                         N0=N0, M0=M0, N0i=N0i, M0i=M0i, S0=S0,
-                         clip_add_cum=clip_add_cum, clip_rem_cum=clip_rem_cum,
-                         nfloor_cum=nfloor_cum, inj_cum=inj_cum,
-                         inj_h2so4_cum=inj_h2so4_cum, settle_cum=settle_cum,
-                         aod_gm=aod_gm,
-                         cumB_keys=np.array(list(cumB.keys())),
-                         cumB_vals=np.array(list(cumB.values())),
-                         cumV_keys=np.array(list(cumV.keys())),
-                         cumV_vals=np.array(list(cumV.values())),
-                         arf_hist=np.array(list(arf_hist)),
-                         inj_cfg=INJ_CFG, phys_cfg=PHYS_CFG,
-                         phys_cfg_keys=PHYS_CFG_KEYS)
+            if len(frame_hours) % CKPT_EVERY_FRAMES == 0 or s == N_STEPS - 1:
+                savez_atomic(f'coupled_frames_{OUT_TAG}_ckpt.npz',
+                         frame_hours=np.array(frame_hours),
+                         frames_num=np.stack(frames_num), frames_mas=np.stack(frames_mas),
+                         frames_dT=np.stack(frames_dT),
+                         frames_so2=np.stack(frames_so2),
+                         frames_h2so4=np.stack(frames_h2so4),
+                         probe_hpa=PLEV_PA[KPROBE] / 100, xk=XK_NP,
+                         # the vertical/horizontal axes, so a zonal frame is
+                         # plottable from this file alone rather than needing the
+                         # final state beside it
+                         plev_pa=PLEV_PA, lat=lat, **_zm_arrays())
+                savez_atomic(f'coupled_timeseries_{OUT_TAG}_ckpt.npz', N0=N0, M0=M0,
+                         inj_cfg=INJ_CFG, inj_cfg_keys=INJ_CFG_KEYS,
+                         phys_cfg=PHYS_CFG, phys_cfg_keys=PHYS_CFG_KEYS,
+                         **{k: np.array(v) for k, v in ts.items()})
+                # full 3-D prognostic state + every cumulative counter, so RESUME=1
+                # can pick the run up from here. Written LAST, so the state is never
+                # newer than the frames/ts it is meant to agree with -- a kill between
+                # the writes leaves them AHEAD of the state instead, which the RESUME
+                # branch trims back (see 'frames/ts ahead of the state' there).
+                if STATE_CKPT:
+                    savez_atomic(f'coupled_state_{OUT_TAG}_ckpt.npz',
+                             s_done=s, nbins=NA, nlev=nlev, nlat=nlat, nlon=nlon,
+                             step_hours=STEP_HOURS,
+                             num=np.asarray(num), mas=np.asarray(mas),
+                             so2=np.asarray(so2), h2so4=np.asarray(h2so4),
+                             dT_rad=np.asarray(dT_rad),
+                             N0=N0, M0=M0, N0i=N0i, M0i=M0i, S0=S0,
+                             clip_add_cum=clip_add_cum, clip_rem_cum=clip_rem_cum,
+                             nfloor_cum=nfloor_cum, inj_cum=inj_cum,
+                             inj_h2so4_cum=inj_h2so4_cum, settle_cum=settle_cum,
+                             aod_gm=aod_gm,
+                             cumB_keys=np.array(list(cumB.keys())),
+                             cumB_vals=np.array(list(cumB.values())),
+                             cumV_keys=np.array(list(cumV.keys())),
+                             cumV_vals=np.array(list(cumV.values())),
+                             arf_hist=np.array(list(arf_hist)),
+                             inj_cfg=INJ_CFG, phys_cfg=PHYS_CFG,
+                             phys_cfg_keys=PHYS_CFG_KEYS)
 
     print(f"\n{'='*60}\nComplete in {time.time()-t0:.0f}s\n{'='*60}", flush=True)
 

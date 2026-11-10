@@ -50,3 +50,19 @@ So it is not dead code exactly — it is a reference implementation with one
 consumer. Deleting it would remove that comparison; keeping it leaves a module
 that must never be imported by anything else. Worth an explicit decision rather
 than a silent one.
+
+## Semi-Lagrangian transport (JCM's operator) — measured, designed, not wired (2026-10-13)
+
+Advection is 6.6 s of the 21.3 s step. dinosaur's `semi_lagrangian` moves
+the same 82 tracers in 49 ms on this grid (`scripts/validation/bench_sl_transport.py`).
+Not wired in because it needs a pole-halo patch, a pressure-level vertical,
+a closed-column boundary treatment and a mass fixer before it can meet the
+repo's conservation gate. The full plan, including how to conserve mass, is
+`docs/TRANSPORT_SL_HANDOFF.md`.
+
+## Radiation: reference-call cache and a column emulator — scoped, not built (2026-10-13)
+
+Radiation is 8.5 s of the 21.3 s step and becomes the largest stage once
+transport is fixed. More than half of it is a solve and a MAM4 binning that
+depend only on the archive hour and can be cached exactly; the rest is one
+RRTMGP solve a per-column network could replace. `docs/RADIATION_EMULATOR_SCOPE.md`.

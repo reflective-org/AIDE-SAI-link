@@ -69,6 +69,12 @@ For the record, what the defaults now give (validated by an 18 h A/B pair):
                       particles were free to leave: the 13.3 hPa top level went
                       0.3% -> ~50% of the model's TOTAL number in 24 h as a
                       6-8 nm mode. Cost: the gases are no longer pinned to CESM.
+  ADV_SCHEME=ffsl     NEW DEFAULT 2026-10-15: fct_lr's flux form at large Courant
+                      number (ADV_FFSL_K=24 sub-steps on the two step snapshots,
+                      ADV_SL_HOURLY=0) instead of lr's 70-250 CFL sub-steps.
+                      advect 1.5 s/step instead of 7.0; 30 days within 0.2 % of
+                      lr on the budgets, 2 % on every quantity (PROCESSES.md 1.9).
+                      --adv-scheme lr is the previous default, byte for byte.
   MICRO               tomas_jax.fast.run_fast, 60 inner steps x 360 s. ~20x
                       faster than physical TOMAS and stable, but its nucleation
                       is BINARY, not ternary.
@@ -149,6 +155,7 @@ KNOBS = [
  ("run", "--step-hours",   "STEP_HOURS",   None,   "H",   "coupling step [h]; one advect+coag per step (default 6)"),
  ("run", "--state-ckpt",   "STATE_CKPT",   "1",    "0|1", "write the 3-D restart checkpoint (needed for --resume)"),
  ("run", "--frame-every",  "FRAME_EVERY",  "24",   "H",   "spatial frame every N hours (>= N_HOURS = final frame only)"),
+ ("run", "--frame3d",      "FRAME3D",      None,   "0|1", "1 = write the full 3-D state + per-cell size statistics + TOA fields after EVERY step to frames3d/step_<s>.npz (~480 MB/step, ~700 GB/yr)"),
  ("run", "--frame-levels", "FRAME_LEVELS", None,   "probe|all",
                                                           "'probe' (default) = one PROBE_HPA level; 'all' adds a "
                                                           "zonal-mean frame at every level (+1.1 GB/yr) and unlocks "
@@ -193,7 +200,7 @@ KNOBS = [
  ("phys", "--wet-optics",  "WET_OPTICS",   None,   "0|1", "hygroscopic growth in the optics"),
  ("phys", "--rad",         "RAD",          None,   "0|1", "radiation on/off"),
  ("phys", "--rad-every",   "RAD_EVERY",    None,   "N",   "coupling steps between radiation calls"),
- ("phys", "--rad-mode",    "RAD_MODE",     None,   "anomaly|full", "heating-rate definition"),
+ ("phys", "--rad-mode",    "RAD_MODE",     None,   "anomaly|full|flux", "heating-rate definition (flux = one solve, no feedback)"),
  ("phys", "--arf-avg-h",   "ARF_AVG_H",    None,   "H",   "trailing window for the reported TOA forcing"),
  ("phys", "--alpha-cond",  "ALPHA_COND",   None,   "X",   "H2SO4 accommodation coefficient"),
  # ---- chemistry / nucleation ----
@@ -206,6 +213,31 @@ KNOBS = [
  ("chem", "--nuc-fn-max",  "NUC_FN_MAX",   None,   "cm-3 s-1", "cap on the total nucleation rate"),
  ("chem", "--n-coag-substeps", "N_COAG_SUBSTEPS", None, "N", "forward-Euler coag substeps (legacy MICRO=coag path)"),
  ("chem", "--coag-max-substeps", "COAG_MAX_SUBSTEPS", None, "N", "ceiling on the adaptive coag substeps (speed-critical)"),
+ # ---- microphysics engine selection / emulator ----
+ ("engine", "--micro-engine", "MICRO_ENGINE", None, "fast|emulator",
+                                                          "which batched engine advances the run (default fast = tomas_jax.fast)"),
+ ("engine", "--micro-ref",  "MICRO_REF",    None,   "fast|emulator",
+                                                          "ALSO run this engine on the same input and log the per-step "
+                                                          "comparison to micro_bench_<TAG>.npz (the run still advances "
+                                                          "with --micro-engine)"),
+ ("engine", "--micro-ref-every", "MICRO_REF_EVERY", None, "N", "compare every N coupling steps (default 1)"),
+ ("engine", "--emu-ckpt",   "EMU_CKPT",     None,   "PATH", "emulator checkpoint (default: bintf_big_rebal avg_top3.pt)"),
+ ("engine", "--emu-d",      "EMU_D",        None,   "N",   "emulator width (384 for the default ckpt, 256 for the light one)"),
+ ("engine", "--emu-nl",     "EMU_NL",       None,   "N",   "emulator depth (6 for the default ckpt, 4 for the light one)"),
+ ("engine", "--emu-bs",     "EMU_BS",       None,   "N",   "cells per emulator forward pass (fixed per compiled graph; default 16384)"),
+ ("engine", "--emu-dtype",  "EMU_DTYPE",    None,   "fp16|fp32", "emulator autocast precision (default fp16; bf16 refused)"),
+ ("engine", "--emu-compile", "EMU_COMPILE", None,   "0|1", "torch.compile(reduce-overhead) the emulator (default 1)"),
+ ("engine", "--emu-oh-floor", "EMU_OH_FLOOR", None,  "cm-3", "OH floor handed to the emulator (default 100; the SZA curve is 0 at night, the training set never was)"),
+ ("engine", "--emu-so2-floor", "EMU_SO2_FLOOR", None, "kg/box", "SO2 floor handed to the emulator (default 1e-17, the training minimum)"),
+ ("engine", "--emu-project", "EMU_PROJECT",  None,   "clip|chem|sulfur|0", "output projection: chem = two-moment clip + exact SO2/H2SO4 chemistry and sulfur budget (default); clip = two-moment consistency only (the first-pass benchmark); sulfur = conservation from the network's gas (worse, see docs/EMULATOR.md)"),
+ ("engine", "--emu-triage", "EMU_TRIAGE",   None,   "0|1", "1 = analytic step for quiet cells, network for the rest (default); 0 = network everywhere"),
+ ("engine", "--emu-phys-top", "EMU_PHYS_TOP", None,  "F",   "hybrid: fraction of cells (top by sulfur per box) integrated by tomas_jax.fast instead of the network (default 0.01, ~0.2 s/step, removes the plume burst error; 0 = off)"),
+ ("engine", "--emu-phys-chunks", "EMU_PHYS_CHUNKS", None, "N", "hybrid: stiffness-sorted cell chunks for the physics subset (default 1)"),
+ ("engine", "--emu-phys-num", "EMU_PHYS_NUM", None, "F", "hybrid: also hand this fraction of the remaining cells, ranked by particle number per box (the dense populations whose coagulation the network under-does), to the fast physics (default 0.04, ~1 s/step; 0 = off)"),
+ ("engine", "--micro-sample-every", "MICRO_SAMPLE_EVERY", None, "N", "write a training-data sample of the engine's input every N steps (0 = off)"),
+ ("engine", "--micro-sample-n", "MICRO_SAMPLE_N", None, "N", "cells per sample (default 5000; plus the plume stratum, capped at n/2)"),
+ ("engine", "--emu-code",   "EMU_CODE",     None,   "PATH", "tomas-emulator code tree (default /data/tomas-emulator)"),
+ ("engine", "--emu-root",   "EMU_ROOT",     None,   "PATH", "emulator checkpoints/norm_stats root (default /data/tomas-jax-output/emulator_v1)"),
  # ---- fast microphysics engine ----
  ("fast", "--fast-dt",     "FAST_DT",      None,   "s",   "inner timestep of run_fast (default 360)"),
  ("fast", "--fast-cell-cap", "FAST_CELL_CAP", "50000", "N", "cells per run_fast chunk; smaller is often FASTER"),
@@ -214,9 +246,27 @@ KNOBS = [
  ("fast", "--fast-coag-sub-cap", "FAST_COAG_SUB_CAP", None, "N", "coag substep cap inside run_fast"),
  ("fast", "--fast-cond-sub-cap", "FAST_COND_SUB_CAP", None, "N", "condensation substep cap inside run_fast"),
  ("fast", "--fast-coag-cmax", "FAST_COAG_CMAX", None, "X", "coag Courant-like limit inside run_fast"),
+ # ---- meteorology source ----
+ ("met", "--met-src",      "MET_SRC",      None,   "cesm|file", "where U/V/OMEGA/T come from: cesm (default) = the hourly h1 archive; file = the step-end frames in MET_DIR (an emulator free run regridded by scripts/met/emu_to_met.py). Gases, reservoirs and the radiation column below the band stay archive-driven"),
+ ("met", "--met-dir",      "MET_DIR",      None,   "PATH", "MET_SRC=file: directory holding u/v/omega/T.npy + meta.json"),
+ ("met", "--met-rh",       "MET_RH",       None,   "q|cesm", "MET_SRC=file: RH = archive water vapour with the file's temperature, over ice (q, default) or the archive's RELHUM as is (cesm)"),
+ ("met", "--bc-src",       "BC_SRC",       None,   "cesm|clim", "where every non-wind boundary field comes from: cesm (default) = the hourly archive; clim = the monthly climatology in CLIM_FILE (scripts/met/make_bc_climatology.py), so the run opens no archive file. Needs --met-src file"),
+ ("met", "--clim-file",    "CLIM_FILE",    None,   "PATH", "BC_SRC=clim: the bc_clim.npz climatology"),
  # ---- advection ----
- ("adv", "--adv-scheme",   "ADV_SCHEME",   None,   "lr|fast", "transport form (default lr = Lin-Rood flux form)"),
+ ("adv", "--adv-scheme",   "ADV_SCHEME",   None,   "lr|fast|sl|ffsl", "transport form (default ffsl = lr at large Courant number, advection/ffsl_lr.py, the production scheme since 2026-10-15; lr = Lin-Rood flux form at CFL sub-steps, the previous default, byte for byte; sl = semi-Lagrangian split, docs/TRANSPORT_SL_HANDOFF.md)"),
+ ("adv", "--adv-ffsl-k",   "ADV_FFSL_K",   None,   "int", "ffsl: sub-steps per coupling step (default 24, the production operating point; 6 = hourly; a convergence knob, each ~1/200 of an lr step)"),
+ ("adv", "--adv-ffsl-split", "ADV_FFSL_SPLIT", None, "strang|lie", "ffsl: sweep order (strang = z/2, xy|yx alternating, z/2, default; lie = fct_lr's x y z)"),
+ ("adv", "--adv-sl-k",     "ADV_SL_K",     None,   "N",   "SL: sub-steps per coupling step (default 6 = one per hourly wind)"),
+ ("adv", "--adv-sl-fixer", "ADV_SL_FIXER", None,   "global|local|none", "SL: per-tracer mass fixer on the closed column (default global; local = Bermejo-Conde)"),
+ ("adv", "--adv-sl-hourly", "ADV_SL_HOURLY", None, "0|1", "sl and ffsl: 1 = read the hourly CESM winds between the step snapshots; 0 (default) = the two snapshots interpolated in time, as lr does and as production winds arrive"),
+ ("adv", "--adv-sl-vert",  "ADV_SL_VERT",  None,   "flux|sl", "SL: vertical treatment (default flux = fct_lr's open-face flux sweep; sl = closed-column 3-D gather, A/B-failed)"),
+ ("adv", "--adv-sl-omega", "ADV_SL_OMEGA", None,   "cont|cesm", "SL flux vertical: face omega from continuity (lr's, default) or CESM centers averaged"),
+ ("adv", "--adv-sl-rho",   "ADV_SL_RHO",   None,   "0|1", "SL flux vertical, lie split only: carry the air mass 1 - dt div(v) through the horizontal step (strang always does; default 0)"),
+ ("adv", "--adv-sl-split", "ADV_SL_SPLIT", None,   "lie|strang", "SL flux vertical: strang (default) = V/2 H V/2 with the air mass carried (second-order face flux); lie = H then V (first order at the open face)"),
+ ("adv", "--adv-sl-jac",   "ADV_SL_JAC",   None,   "0|1", "SL flux vertical: 1 (default) = air mass from the Jacobian of the departure map and the bookkeeping remainder returned through the faces; 0 = Eulerian 1 - dt div(v) and the global column fixer"),
+ ("adv", "--adv-sl-vorder", "ADV_SL_VORDER", None, "linear|cubic", "SL: vertical gather order (default linear)"),
  ("adv", "--adv-cfl",      "ADV_CFL",      None,   "X",   "horizontal CFL target (production 0.5)"),
+ ("adv", "--adv-passive",  "ADV_PASSIVE",  None,   "0|1", "TEST: advect ONE total-sulfate tracer (+ the two gases) and rescale every bin by the cell's mass ratio (frozen per-cell shape); score against the same run with 0"),
  ("adv", "--adv-f32",      "ADV_F32",      None,   "0|1", "float32 transport sweeps (production 1)"),
  ("adv", "--adv-vpos",     "ADV_VPOS",     "1",    "0|1", "VERTICAL POSITIVITY LIMITER -- see the header; do not turn off"),
  ("adv", "--adv-wcont",    "ADV_WCONT",    None,   "0|1", "rederive omega from discrete continuity (opens the faces)"),
@@ -227,6 +277,16 @@ KNOBS = [
  ("rad", "--co2-ppm",      "CO2_PPM",      None,   "ppm", "background CO2 for RRTMGP"),
  ("rad", "--n2o-ppb",      "N2O_PPB",      None,   "ppb", "background N2O for RRTMGP"),
  ("rad", "--rad-lat-chunk", "RAD_LAT_CHUNK", None, "N",   "latitude rows per radiation chunk (GPU memory)"),
+ # ---- radiation engine / reference cache / A-B (docs/RADIATION.md) ----
+ ("rad", "--rad-engine",   "RAD_ENGINE",   None,   "rrtmgp|emulator", "which engine solves the EVOLVED radiation call (default rrtmgp = the physics; emulator = the column network, src/radiation/rad_emulator.py)"),
+ ("rad", "--rad-ref",      "RAD_REF",      None,   "rrtmgp", "with --rad-engine emulator: ALSO run the physics on the same input and log the per-step comparison to rad_bench_<TAG>.npz (the run advances with the engine)"),
+ ("rad", "--rad-ref-every", "RAD_REF_EVERY", None, "N",   "compare every N radiation steps (default 1)"),
+ ("rad", "--rad-ref-cache", "RAD_REF_CACHE", None, "PATH|0", "per-archive-hour cache of the reference-aerosol solve and the clear-sky fields (default inputs/cache/rad_ref; bit-identical on a hit, computes+stores on a miss; 0 = off)"),
+ ("rad", "--rad-sample-every", "RAD_SAMPLE_EVERY", None, "N", "write rad_sample_<TAG>_s<step>.npz (evolved bins, dT_rad, hour) every N radiation steps -- emulator training data (0 = off)"),
+ ("rad", "--rad-emu-ckpt", "RAD_EMU_CKPT", None,   "PATH", "radiation emulator weights (.npz exported by scripts/radiation/train_rad_mlp.py)"),
+ ("rad", "--rad-emu-anom", "RAD_EMU_ANOM", None,   "net|phys", "emulator anomaly: net = network on BOTH evolved and reference aerosol (errors cancel in the background; default) | phys = network evolved minus the exact cached reference"),
+ ("rad", "--rad-emu-arf",  "RAD_EMU_ARF",  None,   "exact|emu", "with --rad-engine emulator: report the TOA forcing from the physics A/B samples (default when --rad-ref rrtmgp; use --rad-ref-every 3 so the 4-sample diurnal window still covers the four local times) or from the networks"),
+ ("rad", "--rad-emu-clip", "RAD_EMU_CLIP", None,   "K/day",     "with --rad-engine emulator: sanity clamp on the networks' heating outputs (TOA deltas at 25x), NaN -> 0, counted and logged; a residual MLP can blow up on an input far outside its training set (default 20; 0 = off)"),
  # ---- memory / performance (numerically irrelevant) ----
  ("perf", "--cell-chunk",  "CELL_CHUNK",   None,   "N",   "cells per microphysics vmap batch"),
  ("perf", "--tracer-chunk", "TRACER_CHUNK", None,  "N",   "tracers per advection batch (0 = all 82 at once)"),
@@ -249,9 +309,11 @@ GROUPS = [
     ("bc",   "boundaries"),
     ("phys", "physics stages"),
     ("chem", "chemistry, nucleation and coagulation"),
+    ("engine", "microphysics engine selection and the emulator (docs/EMULATOR.md)"),
     ("fast", "fast microphysics engine"),
     ("adv",  "advection"),
-    ("rad",  "radiation gases and chunking"),
+    ("met",  "meteorology source (MET_SRC; scripts/met/emu_to_met.py writes the file)"),
+    ("rad",  "radiation gases, chunking, engine selection and the emulator (docs/RADIATION.md)"),
     ("perf", "memory / performance (cannot change results)"),
     ("path", "input data locations"),
     ("dbg",  "debug dumps"),
