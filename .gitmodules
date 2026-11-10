@@ -5,3 +5,6 @@
 [submodule "models/jax-rrtmgp"]
 	path = models/jax-rrtmgp
 	url = https://github.com/climate-analytics-lab/jax-rrtmgp
+[submodule "models/MAM4-JAX"]
+	path = models/MAM4-JAX
+	url = https://github.com/reflective-org/MAM4-JAX.git
